@@ -89,6 +89,19 @@ export function useModelProviderNavigation({
     return sortModelProvidersForDisplay(allCustomProviders, displayOrder);
   }, [displayOrder, modelProviders]);
 
+  const aiProxyProviders = useMemo(() => {
+    return customProviders.filter(
+      (provider) =>
+        provider.templateId === "ai-proxy" ||
+        provider.providerId === "ai-proxy" ||
+        provider.providerId.startsWith("ai-proxy:"),
+    );
+  }, [customProviders]);
+
+  const regularCustomProviders = useMemo(() => {
+    return customProviders.filter((provider) => !aiProxyProviders.includes(provider));
+  }, [customProviders, aiProxyProviders]);
+
   const codingPlanItems = useMemo(
     () =>
       CODING_PLAN_PROVIDER_SPECS.filter((spec) =>
@@ -210,10 +223,25 @@ export function useModelProviderNavigation({
           ...codingPlanItems.filter((item) => isStartPlanModelProviderId(item.presetId)),
         ],
       },
+      ...(aiProxyProviders.length > 0
+        ? [
+            {
+              id: "aiProxy" as const,
+              title: "AI Proxy",
+              items: aiProxyProviders.map((provider) => ({
+                key: createCustomProviderNodeKey(provider.providerId),
+                type: "custom" as const,
+                label: getProviderFormLabel(provider),
+                provider,
+                statusActive: provider.executable === true,
+              })),
+            },
+          ]
+        : []),
       {
         id: "custom",
         title: intl.formatMessage({ id: "settings.modelProvider.customTitle" }),
-        items: customProviders.map((provider) => ({
+        items: regularCustomProviders.map((provider) => ({
           key: createCustomProviderNodeKey(provider.providerId),
           type: "custom" as const,
           label: getProviderFormLabel(provider),

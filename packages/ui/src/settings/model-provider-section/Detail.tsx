@@ -426,7 +426,12 @@ export function ModelProviderSectionDetail({
               : undefined
           }
           onTestModel={onTestModel}
-          readOnlyEndpoints
+          readOnlyEndpoints={
+            presetProvider.templateId === "ai-proxy" ||
+            presetProvider.providerId.startsWith("ai-proxy")
+              ? false
+              : true
+          }
           // 预置供应商名称承载固定 API Key 入口语义，
           // 允许重命名会让侧边栏和模型选择器展示含义不一致，因此只允许自定义供应商改名。
           nameEditable={false}
