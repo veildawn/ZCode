@@ -224,6 +224,15 @@ export { IFileWatcherService } from "./fileWatcher/fileWatcher.js";
 
 // OAuth service — IOAuthService is both a type (interface) and value (descriptor)
 export { IOAuthService } from "./oauth/oauth.js";
+// AI Proxy 网关 OAuth 登录的结果类型；实现依赖 node:http/node:crypto，只能从
+// @zcode/services/node 侧装配，这里保持 browser-safe 的类型出口。
+export type {
+  AiProxyOAuthFailure,
+  AiProxyOAuthFailureCode,
+  AiProxyOAuthPollResult,
+  AiProxyOAuthStartResponse,
+  AiProxyOAuthToken,
+} from "./oauth/aiProxyOAuth.js";
 
 // UsageStats service — IUsageStatsService is both a type (interface) and value (descriptor)
 export { IUsageStatsService } from "./usage-stats/usageStats.js";

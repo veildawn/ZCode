@@ -17,6 +17,11 @@ import {
   type SavePersonalModelDraftInput,
 } from "@zcode/provider";
 import { createServiceDescriptor } from "../descriptors.js";
+import {
+  buildAiProxyModelConfig,
+  isAiProxyChatModel,
+  type AiProxyCatalogEntry,
+} from "./aiProxyModelCatalog.js";
 import type { ModelConnectivityResult } from "@zcode/shared";
 import { createServiceLogger } from "../logger/serviceLogger.js";
 
@@ -68,7 +73,29 @@ export interface IProviderSettingsService {
   testModelConnectivity(
     input: ProviderSettingsConnectivityRequest,
   ): Promise<ModelConnectivityResult>;
+
+  /**
+   * 用 AI Proxy 网关的 `/v1/models` 重写该 Provider 的模型集合。
+   *
+   * 供应商的模型目录会变（新增、下线、上下文窗口调整、思考档位变化），而
+   * Provider 凭据不变；登录后、软件启动时与设置页打开时都走这一条，让本地列表
+   * 始终等于网关当下能服务的集合。
+   */
+  syncAiProxyModels(providerId: ProviderId): Promise<AiProxyModelSyncResult>;
 }
+
+export interface AiProxyModelSyncResult {
+  readonly providerId: ProviderId;
+  readonly modelIds: readonly ModelId[];
+  /** 网关目录里非 chat 面、因此没有进 ZCode 模型列表的 id。 */
+  readonly skippedModelIds: readonly string[];
+}
+
+/** 宿主侧取数：走宿主网络栈（代理、企业 CA）请求网关目录。 */
+export type AiProxyCatalogFetcher = (input: {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+}) => Promise<readonly AiProxyCatalogEntry[]>;
 
 export const IProviderSettingsService = createServiceDescriptor<IProviderSettingsService>(
   ServiceChannels.ProviderSettings,
@@ -110,6 +137,7 @@ export function createProviderSettingsService(
   facade: ProviderSettingsFacade,
   ensureReady: () => Promise<void> = async () => {},
   testConnectivity?: ProviderSettingsConnectivityTester,
+  fetchAiProxyCatalog?: AiProxyCatalogFetcher,
 ): IProviderSettingsService {
   return {
     onDidChange: toEvent((listener) => facade.onDidChange(listener)),
@@ -164,6 +192,45 @@ export function createProviderSettingsService(
     setPersonalModelEnabled: async (providerId, modelId, enabled) => {
       await ensureReady();
       return facade.setPersonalModelEnabled(providerId, modelId, enabled);
+    },
+    syncAiProxyModels: async (providerId) => {
+      await ensureReady();
+      if (!fetchAiProxyCatalog) {
+        throw new Error("当前 Environment 未装配 AI Proxy 模型目录同步能力");
+      }
+      const provider = facade.getView().providers.find((item) => item.providerId === providerId);
+      if (!provider) {
+        throw new Error(`Provider 不存在: ${providerId}`);
+      }
+      const access = provider.effectiveConfig.access;
+      const apiKey =
+        access && (access.type === "api-key" || access.type === "zhipu-coding-plan-api-key")
+          ? access.apiKey?.trim()
+          : undefined;
+      const baseUrl = provider.effectiveConfig.api?.baseUrl?.trim();
+      if (!apiKey || !baseUrl) {
+        throw new Error("该 Provider 还没有网关地址或凭据，无法同步模型目录");
+      }
+      const entries = await fetchAiProxyCatalog({ baseUrl, apiKey });
+      const chatEntries = entries.filter(isAiProxyChatModel);
+      if (chatEntries.length === 0) {
+        // 空目录一律按失败处理：网关临时抽风不该把用户已有的模型列表清空。
+        throw new Error("网关没有返回任何可用的 chat 模型");
+      }
+      await facade.replacePersonalModels(
+        providerId,
+        chatEntries.map((entry) => ({
+          modelId: entry.id,
+          config: buildAiProxyModelConfig(entry),
+        })),
+      );
+      return {
+        providerId,
+        modelIds: chatEntries.map((entry) => entry.id),
+        skippedModelIds: entries
+          .filter((entry) => !isAiProxyChatModel(entry))
+          .map((entry) => entry.id),
+      };
     },
     testModelConnectivity: async (input) => {
       await ensureReady();

@@ -1,6 +1,6 @@
 /* oxlint-disable eslint(max-lines) -- Settings/Selection Facade 共享同一套 Registry 投影与写入边界。 */
 import type { ConfigValidationIssue } from "./config-overlay.js";
-import type { ProviderModelMembership } from "./config-service.js";
+import type { PersonalModelReplacement, ProviderModelMembership } from "./config-service.js";
 import type {
   ModelConfig,
   ModelConfigObject,
@@ -71,6 +71,11 @@ export interface ProviderSettingsMutationTarget {
     config: ModelConfig,
     membership?: ProviderModelMembership,
     useRecommendedConfig?: boolean,
+  ): Promise<unknown>;
+  replacePersonalModels(
+    providerId: ProviderId,
+    models: readonly PersonalModelReplacement[],
+    membership?: ProviderModelMembership,
   ): Promise<unknown>;
   renamePersonalModel(
     providerId: ProviderId,
@@ -368,6 +373,25 @@ export class ProviderSettingsFacade {
         parseModelConfig(config),
         this.#modelMembership(providerId),
         useRecommendedConfig,
+      ),
+    );
+  }
+
+  /**
+   * 用外部目录整体替换一个 Personal Provider 的模型集合（成员 / 顺序 / 配置一起写）。
+   */
+  replacePersonalModels(
+    providerId: ProviderId,
+    models: ReadonlyArray<{ readonly modelId: ModelId; readonly config: ModelConfigObject }>,
+  ): Promise<ProviderSettingsView> {
+    return this.#mutateProvider(providerId, "replace-models", (target) =>
+      target.replacePersonalModels(
+        providerId,
+        models.map((model) => ({
+          modelId: model.modelId,
+          config: parseModelConfig(model.config),
+        })),
+        this.#modelMembership(providerId),
       ),
     );
   }

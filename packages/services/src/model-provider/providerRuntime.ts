@@ -11,6 +11,8 @@ import {
   type ProviderSettingsMutationTarget,
   type ProviderSource,
 } from "@zcode/provider";
+import { BUILTIN_PROVIDER_TEMPLATE_IDS } from "@zcode/shared";
+import { createServiceLogger } from "../logger/serviceLogger.js";
 import {
   createProviderConfigRuntime,
   type ProviderConfigRuntime,
@@ -19,6 +21,7 @@ import {
 import {
   createModelSelectionService,
   createProviderSettingsService,
+  type AiProxyCatalogFetcher,
   type IModelSelectionService,
   type IProviderSettingsService,
   type ModelSelectionConfiguredDefaultSource,
@@ -28,6 +31,7 @@ import {
 export interface ProviderRuntimeOptions extends ProviderConfigRuntimeOptions {
   readonly accountSource?: RefreshableProviderSource<AccountProviderConfigSnapshot>;
   readonly testConnectivity?: ProviderSettingsConnectivityTester;
+  readonly fetchAiProxyCatalog?: AiProxyCatalogFetcher;
 }
 
 export interface ProviderRuntimeDependencies {
@@ -35,6 +39,7 @@ export interface ProviderRuntimeDependencies {
   readonly accountSource?: RefreshableProviderSource<AccountProviderConfigSnapshot>;
   readonly disposeAccountSource?: () => void;
   readonly testConnectivity?: ProviderSettingsConnectivityTester;
+  readonly fetchAiProxyCatalog?: AiProxyCatalogFetcher;
   readonly modelSelectionConfiguredDefaultSource?: ModelSelectionConfiguredDefaultSource;
   readonly disposeModelSelectionConfiguredDefaultSource?: () => void;
 }
@@ -42,6 +47,14 @@ export interface ProviderRuntimeDependencies {
 interface RefreshableProviderSource<TSnapshot> extends ProviderSource<TSnapshot> {
   refresh?(reason: string): Promise<TSnapshot>;
 }
+
+const log = createServiceLogger("provider-runtime");
+
+/**
+ * 网关模型目录自动刷新间隔。网关的模型集合变化是低频事件（上架/下线/改档位），
+ * 每半小时问一次足够跟上，也不会把长会话里的网关查询变成负担。
+ */
+const AI_PROXY_MODEL_SYNC_INTERVAL_MS = 30 * 60 * 1000;
 
 /**
  * 普通 API Provider 可以在账号能力尚未装配时独立运行。
@@ -69,6 +82,8 @@ export class ProviderRuntime {
   readonly #disposeAccountSource?: () => void;
   readonly #disposeBuiltinRecovery: () => void;
   readonly #modelSelectionRuntime: IModelSelectionService & { dispose(): void };
+  #aiProxySyncTimer: ReturnType<typeof setInterval> | null = null;
+  #aiProxySyncInFlight: Promise<void> | null = null;
   readonly #disposeModelSelectionConfiguredDefaultSource?: () => void;
   #startPromise: ReturnType<ProviderRegistryService["start"]> | null = null;
   #disposed = false;
@@ -105,6 +120,7 @@ export class ProviderRuntime {
       settingsFacade,
       ensureReady,
       dependencies.testConnectivity,
+      dependencies.fetchAiProxyCatalog,
     );
     this.#modelSelectionRuntime = createModelSelectionService(
       createNodeModelSelectionFacade(this.registryService),
@@ -117,7 +133,12 @@ export class ProviderRuntime {
   start(): Promise<void> {
     if (this.#disposed) throw new Error("ProviderRuntime 已 dispose");
     if (this.#startPromise) return this.#startPromise;
-    const startPromise = this.#configRuntime.start().then(() => this.registryService.start());
+    const startPromise = this.#configRuntime
+      .start()
+      .then(() => this.registryService.start())
+      .then(() => {
+        this.#startAiProxyModelSync();
+      });
     this.#startPromise = startPromise;
     void startPromise.catch(() => {
       if (this.#startPromise === startPromise) this.#startPromise = null;
@@ -128,12 +149,78 @@ export class ProviderRuntime {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    if (this.#aiProxySyncTimer) {
+      clearInterval(this.#aiProxySyncTimer);
+      this.#aiProxySyncTimer = null;
+    }
     this.#disposeBuiltinRecovery();
     this.#modelSelectionRuntime.dispose();
     this.registryService.dispose();
     this.#disposeAccountSource?.();
     this.#disposeModelSelectionConfiguredDefaultSource?.();
     this.#configRuntime.dispose();
+  }
+
+  /**
+   * 软件启动时同步一次网关模型目录，之后按固定间隔再同步。
+   *
+   * 单飞：启动同步、设置页打开与定时刷新可能同时触发，重复请求既浪费网关查询，
+   * 也会让同一时刻有两次配置写入。失败只记录日志——网关不可达不该阻断启动，
+   * 也不该把上一次同步出来的模型列表清空。
+   */
+  syncAiProxyGatewayModels(reason: string): Promise<void> {
+    const inFlight = this.#aiProxySyncInFlight;
+    if (inFlight) return inFlight;
+    const run = this.#runAiProxyModelSync(reason).finally(() => {
+      if (this.#aiProxySyncInFlight === run) this.#aiProxySyncInFlight = null;
+    });
+    this.#aiProxySyncInFlight = run;
+    return run;
+  }
+
+  #startAiProxyModelSync(): void {
+    void this.syncAiProxyGatewayModels("startup");
+    if (this.#aiProxySyncTimer) return;
+    this.#aiProxySyncTimer = setInterval(() => {
+      void this.syncAiProxyGatewayModels("interval");
+    }, AI_PROXY_MODEL_SYNC_INTERVAL_MS);
+    // 定时器不是进程存活理由：只有 Host 还在跑的时候它才有意义。
+    this.#aiProxySyncTimer.unref?.();
+  }
+
+  async #runAiProxyModelSync(reason: string): Promise<void> {
+    if (this.#disposed) return;
+    let view: Awaited<ReturnType<IProviderSettingsService["getView"]>>;
+    try {
+      view = await this.providerSettings.getView();
+    } catch (error) {
+      log.warn(undefined, "AI Proxy 模型同步读取 Provider 视图失败", { reason, error });
+      return;
+    }
+    for (const provider of view.providers) {
+      if (this.#disposed) return;
+      if (provider.templateId !== BUILTIN_PROVIDER_TEMPLATE_IDS.aiProxy) continue;
+      // 还没有凭据的 Provider（模板预设、用户没登录）保持原样：模板自带 access
+      // 类型与网关地址，只有 apiKey 才是"这个 Provider 真的能请求网关"的证据。
+      const access = provider.effectiveConfig.access;
+      const apiKey = access?.type === "api-key" ? access.apiKey?.trim() : undefined;
+      if (!apiKey || !provider.effectiveConfig.api?.baseUrl) continue;
+      try {
+        const result = await this.providerSettings.syncAiProxyModels(provider.providerId);
+        log.info(undefined, "AI Proxy 模型目录已同步", {
+          reason,
+          providerId: provider.providerId,
+          models: result.modelIds.length,
+          skipped: result.skippedModelIds.length,
+        });
+      } catch (error) {
+        log.warn(undefined, "AI Proxy 模型目录同步失败", {
+          reason,
+          providerId: provider.providerId,
+          error,
+        });
+      }
+    }
   }
 }
 
@@ -153,6 +240,8 @@ function createSettingsMutationTarget(
       configService.reorderPersonalModels(providerId, modelIds, membership),
     // 手工四参数转发曾丢掉新增的配置模式；直接绑定完整签名，避免装配层截断写入意图。
     addPersonalModel: configService.addPersonalModel.bind(configService),
+    replacePersonalModels: (providerId, models, membership) =>
+      configService.replacePersonalModels(providerId, models, membership),
     renamePersonalModel: (providerId, currentModelId, nextModelId, membership) =>
       configService.renamePersonalModel(providerId, currentModelId, nextModelId, membership),
     deletePersonalModel: (providerId, modelId, membership) =>
@@ -194,7 +283,7 @@ function createSettingsMutationTarget(
 }
 
 export function createProviderRuntime(options: ProviderRuntimeOptions): ProviderRuntime {
-  const { accountSource, testConnectivity, ...configRuntimeOptions } = options;
+  const { accountSource, testConnectivity, fetchAiProxyCatalog, ...configRuntimeOptions } = options;
   const configRuntime = createProviderConfigRuntime(configRuntimeOptions);
   const modelSelectionConfiguredDefaultSource = new NodeModelSelectionConfigRepository({
     personalRepository: configRuntime.personalRepository,
@@ -203,6 +292,7 @@ export function createProviderRuntime(options: ProviderRuntimeOptions): Provider
     configRuntime,
     accountSource,
     testConnectivity,
+    fetchAiProxyCatalog,
     modelSelectionConfiguredDefaultSource,
     disposeModelSelectionConfiguredDefaultSource: () =>
       modelSelectionConfiguredDefaultSource.dispose(),

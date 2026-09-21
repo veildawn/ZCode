@@ -5,11 +5,13 @@ import { join, resolve, win32 } from "node:path";
 import type { ConnectOptions } from "@zcode/server/remote";
 import { listSSHConfigAliasesFromLocalConfig } from "@zcode/services/node";
 import { DEV_HELPER_APP_NAME, HELPER_APP_NAME } from "@zcode/zcode-cua/broker/helperConstants";
+import { resolveDesktopProductIdentityFromBuild } from "../../scripts/desktop-product-identity.mjs";
 import {
   ZCODE_APP_VERSION_ENV,
   ZCODE_AGENT_RUNTIME,
   ZCODE_DYNAMIC_WORKFLOW_MODE_ENV,
   ZCODE_ENV,
+  ZCODE_PRODUCT_BRAND,
   ZCODE_PRODUCT_FLAVOR,
   ZCODE_RUNTIME_ENV_KEY,
   ZCODE_VERSION,
@@ -42,9 +44,16 @@ const isLocalDevelopmentRuntime = !isElectronAppPackaged();
 export const desktopRuntimeEnv: ZCodeRuntimeEnv = isLocalDevelopmentRuntime
   ? "development"
   : "production";
-// 身份看编译期 flavor 而不是 ZCODE_ENV：ZCODE_PREVIEW_IDENTITY=1 的生产后端构建同样是 Preview，
-// 需要独立的应用名、Electron 数据目录和 Helper 安装子目录才能与正式版并排运行。
+// 打包态身份来自编译期 flavor 与品牌开关（而不是运行时环境变量）：应用名必须与安装包
+// productName 完全一致，否则 userData 目录会漂移。两者都只有 desktop-product-identity.mjs
+// 一个来源，改名不会漏掉数据目录。
+// flavor 仍然决定打包态行为（Helper 安装子目录、动态工作流灰度等），与产品名分开计算：
+// 改名只动 productName，不改变 flavor 语义。
 const isPreviewPackagedRuntime = !isLocalDevelopmentRuntime && ZCODE_PRODUCT_FLAVOR === "preview";
+const packagedProductName = resolveDesktopProductIdentityFromBuild({
+  flavor: ZCODE_PRODUCT_FLAVOR,
+  brand: ZCODE_PRODUCT_BRAND,
+}).productName;
 
 function readRuntimeEnvOverride(name: string): string | undefined {
   return process.env[name]?.trim() || undefined;
@@ -60,7 +69,7 @@ function isTruthyRuntimeEnvOverride(name: string): boolean {
 // 这里允许测试显式隔离运行时身份，正常桌面/远控路径保持原来的默认值。
 export const runtimeApplicationName =
   readRuntimeEnvOverride("ZCODE_DESKTOP_APPLICATION_NAME") ??
-  (isLocalDevelopmentRuntime ? "ZCode Dev" : isPreviewPackagedRuntime ? "ZCode Preview" : "ZCode");
+  (isLocalDevelopmentRuntime ? "ZCode Dev" : packagedProductName);
 // Electron 的 app.getPath("home") 不一定跟随测试进程里的 HOME 覆盖。
 // e2e 默认工作区依赖 home 路径，因此提供显式覆盖，避免测试写到开发者真实 ~/ZCodeProject。
 export const runtimeHomePath = readRuntimeEnvOverride("ZCODE_DESKTOP_HOME_DIR");

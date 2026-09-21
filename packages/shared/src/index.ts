@@ -61,6 +61,7 @@ export {
 } from "./shortcutCommands.js";
 export {
   ZCODE_ENV,
+  ZCODE_PRODUCT_BRAND,
   ZCODE_PRODUCT_FLAVOR,
   ZCODE_APP_VERSION_ENV,
   ZCODE_BUILD_COMMIT_ID_ENV,

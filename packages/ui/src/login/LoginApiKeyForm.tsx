@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
+import { encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { useProviderSettingsView } from "@/hooks/useProviderSettingsView.js";
 import { useServices } from "@/hooks/useServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -41,20 +42,34 @@ import {
 import { useZCodeStore } from "@/store/StoreProvider.js";
 
 interface LoginApiKeyFormProps {
+  /**
+   * 锁定供应商：此时不渲染选择器，只显示当前供应商身份。
+   * 网关登录这类"入口即确定供应商"的场景不该让用户顺手切到智谱官方。
+   */
+  lockedProviderChoice?: ApiKeyProviderChoice;
+  /** 外层已经用 tab/标题说明当前方式时，隐藏表单自带的 "API Key" 标题。 */
+  hideTitle?: boolean;
   onCancel: () => void;
   onSaved: () => void | Promise<void>;
   onSkipped: () => void | Promise<void>;
 }
 
-export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFormProps) {
+export function LoginApiKeyForm({
+  lockedProviderChoice,
+  hideTitle,
+  onCancel,
+  onSaved,
+  onSkipped,
+}: LoginApiKeyFormProps) {
   const { intl, locale } = useZCodeIntl();
   const platform = usePlatform();
   const { modelSelectionService, providerSettingsService, settingService } = useServices();
   const markApiKeyLoginSuccess = useZCodeStore((state) => state.markApiKeyLoginSuccess);
-  const [providerChoice, setProviderChoice] = useState<ApiKeyProviderChoice>(() =>
-    resolveLoginApiKeyDefaultProvider(locale),
+  const [providerChoice, setProviderChoice] = useState<ApiKeyProviderChoice>(
+    () => lockedProviderChoice ?? resolveLoginApiKeyDefaultProvider(locale),
   );
-  const [baseUrlValue, setBaseUrlValue] = useState("https://aps.veildawn.com/v1");
+  // 网关地址不预填：用户填哪个就接哪个，避免默认值把请求发到别人的网关。
+  const [baseUrlValue, setBaseUrlValue] = useState("");
   const [apiKeyValue, setApiKeyValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [skipping, setSkipping] = useState(false);
@@ -62,6 +77,26 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
   const providerSettingsRead = useProviderSettingsView();
   const providerSettingsView =
     providerSettingsRead.state.status === "ready" ? providerSettingsRead.state.view : null;
+
+  // 网关 Provider 的模型列表来自网关自己：登录成功后先同步目录，默认模型取同步结果
+  // 的第一个模型（网关顺序即优先级），同步失败才退回内置模板给出的默认值。
+  const resolveLoginDefaultModelPreference = async (providerId: string): Promise<string | null> => {
+    if (providerChoice === "ai-proxy") {
+      try {
+        const synced = await providerSettingsService.syncAiProxyModels(providerId);
+        const firstModelId = synced.modelIds[0];
+        if (firstModelId) {
+          return encodeCustomModelValue(providerId, firstModelId);
+        }
+      } catch (syncError) {
+        logger.warn("[LoginEntry] 同步 AI Proxy 网关模型目录失败", { syncError });
+      }
+    }
+    return buildLoginApiKeyDefaultModelPreferenceFromSelection(
+      await modelSelectionService.getView(),
+      providerId,
+    );
+  };
 
   const providerLabel = resolveLoginApiKeyProviderLabel(providerChoice);
   const templateId = resolveLoginApiKeyTemplateId(providerChoice);
@@ -100,7 +135,8 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
         try {
           const parsed = new URL(normalizedBaseUrl);
           if (
-            (parsed.hostname === "aps.veildawn.com" || parsed.hostname.endsWith(".aps.veildawn.com")) &&
+            (parsed.hostname === "aps.veildawn.com" ||
+              parsed.hostname.endsWith(".aps.veildawn.com")) &&
             (parsed.pathname === "" || parsed.pathname === "/")
           ) {
             normalizedBaseUrl = `${parsed.protocol}//${parsed.host}/v1`;
@@ -117,9 +153,13 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
         access: { type: template.config.access.type, apiKey },
       };
       if (providerChoice === "ai-proxy") {
+        if (!normalizedBaseUrl) {
+          setError(intl.formatMessage({ id: "login.apiKey.baseUrlRequired" }));
+          return;
+        }
         initialConfig.api = {
           type: "openai-chat-completions",
-          baseUrl: normalizedBaseUrl || "https://aps.veildawn.com/v1",
+          baseUrl: normalizedBaseUrl,
         };
       }
 
@@ -127,10 +167,7 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
         templateId,
         initialConfig: initialConfig as any,
       });
-      const defaultModelPreference = buildLoginApiKeyDefaultModelPreferenceFromSelection(
-        await modelSelectionService.getView(),
-        created.providerId,
-      );
+      const defaultModelPreference = await resolveLoginDefaultModelPreference(created.providerId);
       markApiKeyLoginSuccess(defaultModelPreference);
       await onSaved();
     } catch (saveError) {
@@ -182,59 +219,68 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <h2 className="text-ui-base font-medium text-foreground">
-          {intl.formatMessage({ id: "login.apiKey.title" })}
-        </h2>
+        {hideTitle ? null : (
+          <h2 className="text-ui-base font-medium text-foreground">
+            {intl.formatMessage({ id: "login.apiKey.title" })}
+          </h2>
+        )}
         <div className="space-y-2">
-          <div>
-            <Select
-              value={providerChoice}
-              onValueChange={(value) => setProviderChoice(value as ApiKeyProviderChoice)}
-              disabled={busy}
-            >
-              <SelectTrigger
-                id="login-api-key-provider"
-                size="lg"
-                className="h-10 w-full text-ui-base"
-                data-testid={TID_LOGIN_API_KEY_PROVIDER_TRIGGER}
-                aria-label={intl.formatMessage({
-                  id: "login.apiKey.providerLabel",
-                })}
+          {lockedProviderChoice ? (
+            <div className="flex h-10 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-ui-base">
+              {renderOAuthProviderIcon(providerChoice as any, "size-4")}
+              <span className="min-w-0 truncate">{providerLabel}</span>
+            </div>
+          ) : (
+            <div>
+              <Select
+                value={providerChoice}
+                onValueChange={(value) => setProviderChoice(value as ApiKeyProviderChoice)}
+                disabled={busy}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent align="end" className="rounded-lg">
-                <SelectItem
-                  value="zai"
-                  className="rounded-md"
-                  data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "zai")}
-                >
-                  {renderOAuthProviderIcon(ZAI_PROVIDER_ID, "size-4")}
-                  {intl.formatMessage({ id: "login.apiKey.provider.zai" })}
-                </SelectItem>
-                <SelectItem
-                  value="bigmodel"
-                  className="rounded-md"
-                  data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "bigmodel")}
-                >
-                  {renderOAuthProviderIcon(BIGMODEL_PROVIDER_ID, "size-4")}
-                  {intl.formatMessage({
-                    id: "login.apiKey.provider.bigmodel",
+                <SelectTrigger
+                  id="login-api-key-provider"
+                  size="lg"
+                  className="h-10 w-full text-ui-base"
+                  data-testid={TID_LOGIN_API_KEY_PROVIDER_TRIGGER}
+                  aria-label={intl.formatMessage({
+                    id: "login.apiKey.providerLabel",
                   })}
-                </SelectItem>
-                <SelectItem
-                  value="ai-proxy"
-                  className="rounded-md"
-                  data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "ai-proxy")}
                 >
-                  {renderOAuthProviderIcon("ai-proxy" as any, "size-4")}
-                  {intl.formatMessage({
-                    id: "login.apiKey.provider.aiProxy",
-                  })}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end" className="rounded-lg">
+                  <SelectItem
+                    value="zai"
+                    className="rounded-md"
+                    data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "zai")}
+                  >
+                    {renderOAuthProviderIcon(ZAI_PROVIDER_ID, "size-4")}
+                    {intl.formatMessage({ id: "login.apiKey.provider.zai" })}
+                  </SelectItem>
+                  <SelectItem
+                    value="bigmodel"
+                    className="rounded-md"
+                    data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "bigmodel")}
+                  >
+                    {renderOAuthProviderIcon(BIGMODEL_PROVIDER_ID, "size-4")}
+                    {intl.formatMessage({
+                      id: "login.apiKey.provider.bigmodel",
+                    })}
+                  </SelectItem>
+                  <SelectItem
+                    value="ai-proxy"
+                    className="rounded-md"
+                    data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "ai-proxy")}
+                  >
+                    {renderOAuthProviderIcon("ai-proxy" as any, "size-4")}
+                    {intl.formatMessage({
+                      id: "login.apiKey.provider.aiProxy",
+                    })}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           {providerChoice === "ai-proxy" && (
             <div className="space-y-1.5">
               <label className="text-ui-xs text-muted-foreground">
@@ -243,7 +289,7 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
               <Input
                 value={baseUrlValue}
                 onChange={(e) => setBaseUrlValue(e.target.value)}
-                placeholder="https://aps.veildawn.com/v1"
+                placeholder="https://gateway.example.com/v1"
                 disabled={busy}
                 className="h-10 text-ui-base"
               />

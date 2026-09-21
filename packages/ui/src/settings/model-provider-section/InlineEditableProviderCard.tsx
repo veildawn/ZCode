@@ -7,16 +7,21 @@ import {
   type ProviderSettingsFormModel,
 } from "@/lib/providerSettingsFormTypes.js";
 import type { ModelConnectivityResult } from "@zcode/shared";
+import { BUILTIN_PROVIDER_TEMPLATE_IDS } from "@zcode/shared";
+import type { AiProxyOAuthToken } from "@zcode/services";
 import {
   isApiKeyAccess,
   type ProviderApiType,
   type SavePersonalModelDraftInput,
 } from "@zcode/provider";
 import { logger } from "@/logger.js";
+import { useServices } from "@/hooks/useServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { Switch } from "@/components/ui/switch.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { isImeComposingKeyEvent } from "@/lib/imeComposition.js";
+import { resolveAiProxyGatewayBaseUrl, useAiProxyOAuthFlow } from "@/login/useAiProxyOAuthFlow.js";
+import { ProviderAiProxyOAuthSection } from "./ProviderAiProxyOAuthSection.js";
 import { resolvePendingProviderDraftSave, type ProviderDraftValues } from "./ProviderDraftSave.js";
 import {
   ProviderApiKeySection,
@@ -182,6 +187,7 @@ export function InlineEditableProviderCard({
   settingsRevision?: number;
 }) {
   const { intl } = useZCodeIntl();
+  const { providerSettingsService } = useServices();
   const { dismissFeedback, showFeedback } = useProviderDetailFeedback();
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState(getProviderFormLabel(provider));
@@ -399,6 +405,141 @@ export function InlineEditableProviderCard({
     },
     [onSave, provider.providerId, runSaveOperation],
   );
+
+  // 网关供应商的 OAuth 入口：与欢迎页的「OAuth 授权」共用宿主流程，
+  // 结果写进当前卡片正在编辑的这份 Personal Overlay（access.apiKey + 需要的 api 叶子）。
+  const isAiProxyProvider =
+    provider.templateId === BUILTIN_PROVIDER_TEMPLATE_IDS.aiProxy ||
+    provider.providerId.startsWith("ai-proxy");
+
+  const handleAiProxyOAuthToken = useCallback(
+    async (token: AiProxyOAuthToken) => {
+      const notification = saveNotificationRef.current;
+      const feedbackKey = `ai-proxy-oauth:${provider.providerId}`;
+      notification.showFeedback({
+        key: feedbackKey,
+        message: notification.formatMessage({
+          id: "settings.modelProvider.aiProxyOAuth.writing",
+        }),
+        state: "pending",
+        durationMs: 0,
+      });
+      const configuredBaseUrl = draftRef.current.baseUrlValue.trim();
+      const nextApiBaseUrl =
+        configuredBaseUrl || `${resolveAiProxyGatewayBaseUrl(configuredBaseUrl)}/v1`;
+      const nextProvider: ProviderSettingsFormProvider = {
+        ...provider,
+        config: {
+          ...provider.config,
+          access: { type: "api-key", apiKey: token.accessToken },
+          api: { ...provider.config.api, type: "openai-chat-completions", baseUrl: nextApiBaseUrl },
+        },
+        personalConfig: {
+          ...provider.personalConfig,
+          access: {
+            ...provider.personalConfig.access,
+            type: "api-key",
+            apiKey: token.accessToken,
+          },
+          api: {
+            ...provider.personalConfig.api,
+            type: "openai-chat-completions",
+            baseUrl: nextApiBaseUrl,
+          },
+        },
+      };
+      try {
+        // 令牌写入和模型同步都要走完才算授权成功；中间失败由上层反馈承担。
+        selfSaveRequestedRef.current = true;
+        await onSave(nextProvider);
+        // 本地草稿跟随权威值：否则下一次 blur 会用旧 Key 把刚写入的令牌覆盖回去。
+        draftRef.current.apiKeyValue = token.accessToken;
+        draftRef.current.baseUrlValue = nextApiBaseUrl;
+        draftRef.current.apiFormat = "openai-chat-completions";
+        dirtyProviderFieldsRef.current.delete("apiKeyValue");
+        dirtyProviderFieldsRef.current.delete("baseUrlValue");
+        dirtyProviderFieldsRef.current.delete("apiFormat");
+        setApiKeyValue(token.accessToken);
+        setBaseUrlValue(nextApiBaseUrl);
+        const synced = await providerSettingsService.syncAiProxyModels(provider.providerId);
+        notification.showFeedback({
+          key: feedbackKey,
+          message: notification.formatMessage(
+            { id: "settings.modelProvider.aiProxyOAuth.success" },
+            { count: synced.modelIds.length },
+          ),
+          state: "success",
+        });
+      } catch (error) {
+        selfSaveRequestedRef.current = false;
+        notification.showFeedback({
+          key: feedbackKey,
+          message: notification.formatMessage(
+            { id: "settings.modelProvider.aiProxyOAuth.failure" },
+            { error: error instanceof Error ? error.message : String(error) },
+          ),
+          state: "failure",
+          durationMs: 8_000,
+          dismissible: true,
+          dismissLabel: notification.formatMessage({ id: "common.close" }),
+        });
+        throw error;
+      }
+    },
+    [onSave, provider, providerSettingsService],
+  );
+
+  const aiProxyOAuth = useAiProxyOAuthFlow({
+    onToken: handleAiProxyOAuthToken,
+    logScope: "ModelProviderSection",
+  });
+
+  const [refreshingModels, setRefreshingModels] = useState(false);
+
+  // 「刷新模型列表」：把网关当下的目录与参数整体重写一遍（成员、顺序、上下文窗口、
+  // 输入模态、思考档位、输出上限），比逐个模型手改更贴近网关事实。
+  const refreshAiProxyModels = useCallback(async () => {
+    const notification = saveNotificationRef.current;
+    const feedbackKey = `ai-proxy-refresh:${provider.providerId}`;
+    setRefreshingModels(true);
+    notification.showFeedback({
+      key: feedbackKey,
+      message: notification.formatMessage({
+        id: "settings.modelProvider.refreshModelsPending",
+      }),
+      state: "pending",
+      durationMs: 0,
+    });
+    try {
+      const synced = await providerSettingsService.syncAiProxyModels(provider.providerId);
+      notification.showFeedback({
+        key: feedbackKey,
+        message: notification.formatMessage(
+          { id: "settings.modelProvider.refreshModelsSuccess" },
+          { count: synced.modelIds.length },
+        ),
+        state: "success",
+      });
+    } catch (error) {
+      logger.warn("[ModelProviderSection] 刷新网关模型列表失败", {
+        providerId: provider.providerId,
+        error,
+      });
+      notification.showFeedback({
+        key: feedbackKey,
+        message: notification.formatMessage(
+          { id: "settings.modelProvider.refreshModelsFailure" },
+          { error: error instanceof Error ? error.message : String(error) },
+        ),
+        state: "failure",
+        durationMs: 8_000,
+        dismissible: true,
+        dismissLabel: notification.formatMessage({ id: "common.close" }),
+      });
+    } finally {
+      setRefreshingModels(false);
+    }
+  }, [provider.providerId, providerSettingsService]);
 
   const cancelIdleDraftSaveRef = useRef<() => void>(() => undefined);
 
@@ -824,6 +965,20 @@ export function InlineEditableProviderCard({
           />
         )}
 
+        {isAiProxyProvider ? (
+          <ProviderAiProxyOAuthSection
+            status={aiProxyOAuth.status}
+            errorMessage={aiProxyOAuth.errorMessage}
+            disabled={!resolveAiProxyGatewayBaseUrl(baseUrlValue).trim()}
+            onStart={() => {
+              void aiProxyOAuth.start(resolveAiProxyGatewayBaseUrl(draftRef.current.baseUrlValue));
+            }}
+            onCancel={() => {
+              void aiProxyOAuth.cancel();
+            }}
+          />
+        ) : null}
+
         {isApiKeyProvider ? (
           <ProviderApiKeySection
             apiKeyValue={apiKeyValue}
@@ -848,6 +1003,8 @@ export function InlineEditableProviderCard({
           providerAccess={provider.config.access}
           models={models}
           onTestModel={onTestModel ? handleTestModel : undefined}
+          onRefreshModels={isAiProxyProvider ? refreshAiProxyModels : undefined}
+          refreshingModels={refreshingModels}
           onModelCommit={handleModelCommit}
           onModelEnabledChange={handleModelEnabledChange}
           onDeleteModel={handleDeleteModel}

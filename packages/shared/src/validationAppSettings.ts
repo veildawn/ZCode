@@ -10,6 +10,7 @@ import {
   embeddedBrowserViewportPreferenceSchema,
 } from "./browser-use/command-metadata.js";
 import { providerFamilyConnectionSelectionSettingsSchema } from "./provider-family-connection-selection.js";
+import { ZCODE_PRODUCT_BRAND } from "./env.js";
 
 /** 引导职业枚举；单独导出供 onboarding 记录回填 settings 时做窄化校验。 */
 const appSettingsOccupationSchema = z.enum([
@@ -468,7 +469,9 @@ const appSettingsObjectSchema = z.object({
   dataBaseDir: z.string().trim().min(1).optional(),
   pendingPostUpdateReleaseNotes: postUpdateReleaseNotesPayloadSchema.optional(),
   receivePreviewUpdates: z.boolean().default(false),
-  autoDownloadAndInstallUpdates: z.boolean().default(false),
+  // 下游品牌（ZCode Gateway）的更新源是本仓库自己的 GitHub Releases，整条链路
+  // （启动检查 → 后台下载 → 退出时安装）默认打开；上游构建保持 opt-in 语义。
+  autoDownloadAndInstallUpdates: z.boolean().default(ZCODE_PRODUCT_BRAND),
   skippedElectronUpdateVersions: skippedElectronUpdateVersionsSchema,
   settingsSyncFirstRunPromptHandled: z.boolean().optional(),
   zcodeEndpointOrigin: zcodeEndpointOriginSchema.optional(),

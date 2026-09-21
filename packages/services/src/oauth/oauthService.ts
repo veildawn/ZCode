@@ -26,6 +26,11 @@ import {
   refreshLegacyBigModelCachedProfile,
   withProviderProfileSchema,
 } from "./oauthProfileSchema.js";
+import {
+  AiProxyOAuthFlow,
+  type AiProxyOAuthPollResult,
+  type AiProxyOAuthStartResponse,
+} from "./aiProxyOAuth.js";
 import { createOAuthProviderAdapters, type OAuthProviderAdapter } from "./providers/index.js";
 import { OAuthCredentialRepo } from "./repo/oauthCredentialRepo.js";
 import { createOAuthRuntimeConfig } from "./runtimeConfig.js";
@@ -129,6 +134,9 @@ export class OAuthService implements IOAuthService {
   private oauthFlowStartGeneration = 0;
   private oauthFlowStartProvider: OAuthProviderId | null = null;
   private oauthSessionGeneration = 0;
+  // AI Proxy 网关登录与智谱账号登录互不干扰：前者只产出 Provider 凭据，
+  // 不改 active provider / 用户档案，所以单独持有一条流程。
+  private readonly aiProxyOAuth: AiProxyOAuthFlow;
   private sessionMutationQueue: Promise<unknown> = Promise.resolve();
   private recentlyCompletedPollingState: {
     generation: number;
@@ -143,6 +151,11 @@ export class OAuthService implements IOAuthService {
     this.onProviderLogout = dependencies.onProviderLogout;
     this.apiClient = dependencies.apiClient;
     this.env = dependencies.env ?? process.env;
+    // 网关登录也要走宿主网络栈：企业代理、自签 CA 与官方 OAuth 同源。
+    this.aiProxyOAuth = new AiProxyOAuthFlow({
+      request: (input, init) =>
+        dependencies.apiClient ? dependencies.apiClient.request(input, init) : fetch(input, init),
+    });
 
     const adapters =
       dependencies.adapters ??
@@ -1097,6 +1110,25 @@ export class OAuthService implements IOAuthService {
     this.oauthFlowStartGeneration += 1;
     this.oauthFlowStartProvider = null;
     this.clearPendingState();
+  }
+
+  async startAiProxyOAuthLogin(baseUrl: string): Promise<AiProxyOAuthStartResponse> {
+    return this.aiProxyOAuth.start(baseUrl);
+  }
+
+  async pollAiProxyOAuthLogin(flowId: string): Promise<AiProxyOAuthPollResult | null> {
+    if (!flowId.trim()) {
+      throw new Error("flowId 不能为空");
+    }
+    const result = await this.aiProxyOAuth.poll(flowId);
+    if (result?.state === "failed") {
+      serviceLog.warn("AI Proxy OAuth failed", { flowId, reason: result.error.code });
+    }
+    return result;
+  }
+
+  async cancelAiProxyOAuthLogin(flowId?: string): Promise<void> {
+    this.aiProxyOAuth.cancel(flowId);
   }
 
   private clearPendingState(): void {

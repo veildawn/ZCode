@@ -52,6 +52,14 @@ export interface PersonalProviderCreation {
   readonly providerId: ProviderId;
 }
 
+/**
+ * 一次整体替换里的单个模型：id 与它的完整配置一起给，顺序即列表顺序。
+ */
+export interface PersonalModelReplacement {
+  readonly modelId: ModelId;
+  readonly config: ModelConfig;
+}
+
 export interface CreatePersonalProviderInput {
   readonly templateId?: ProviderTemplateId;
   readonly providerName?: string;
@@ -360,6 +368,78 @@ export class ProviderConfigService implements ProviderSource<ProviderConfigSnaps
           config.overlay(new ModelConfig({ enabled: true })),
           useRecommendedConfig,
         ),
+        providerOrder: current.providerOrder,
+      };
+    });
+  }
+
+  /**
+   * 用外部目录（网关 /v1/models 这类）整体替换一个 Personal Provider 的模型集合。
+   *
+   * 成员、顺序、每个模型的配置在同一次事务里写完：逐个 add/delete 的中间态会让
+   * 列表短暂地缺模型或多出重复项，也会让一次同步产生十几次磁盘写与 View 广播。
+   *
+   * 目录里没有的**继承**模型（模板 builtin）被显式停用，而不是删掉——继承成员
+   * 归模板所有，停用是这个 Provider 唯一能表达的"网关已经没有它了"。
+   */
+  async replacePersonalModels(
+    providerId: ProviderId,
+    models: readonly PersonalModelReplacement[],
+    membership?: ProviderModelMembership,
+  ): Promise<ProviderConfigLayerSnapshot> {
+    const normalizedProviderId = normalizeId("providerId", providerId);
+    const entries: PersonalModelReplacement[] = [];
+    const seen = new Set<ModelId>();
+    for (const model of models) {
+      const modelId = normalizeId("modelId", model.modelId);
+      if (seen.has(modelId)) continue;
+      seen.add(modelId);
+      entries.push({ modelId, config: model.config });
+    }
+    const zcodeBuiltin = await this.#zcodeBuiltinSource.read();
+    return this.#updatePersonal((current) => {
+      assertMembershipCurrent(membership, normalizedProviderId, current);
+      const provider = writableProviderOverlay(zcodeBuiltin, current, normalizedProviderId);
+      const builtinModelIds =
+        membership?.inheritedModelIds ??
+        resolveProviderBuiltinModelIds(zcodeBuiltin, current.providers, normalizedProviderId);
+      const personalModelIds = entries
+        .map((entry) => entry.modelId)
+        .filter((modelId) => !builtinModelIds.includes(modelId));
+      let nextModels = current.models.deleteExactForProvider(normalizedProviderId);
+      for (const entry of entries) {
+        // 用户在设置页关掉的模型保持关闭：目录同步刷新的是能力参数，
+        // 不是替用户重新做"我要不要这个模型"的决定。
+        const previousEnabled = current.models.getExact(
+          normalizedProviderId,
+          entry.modelId,
+        )?.enabled;
+        nextModels = nextModels.setExact(
+          normalizedProviderId,
+          entry.modelId,
+          entry.config.overlay(new ModelConfig({ enabled: previousEnabled ?? true })),
+        );
+      }
+      for (const inheritedId of builtinModelIds) {
+        if (seen.has(inheritedId)) continue;
+        nextModels = nextModels.setExact(
+          normalizedProviderId,
+          inheritedId,
+          new ModelConfig({ enabled: false }),
+        );
+      }
+      return {
+        providers: current.providers.set(
+          normalizedProviderId,
+          provider.withPersonalModelIds(personalModelIds).withModelOrder(
+            normalizeModelOrder(
+              builtinModelIds,
+              personalModelIds,
+              entries.map((entry) => entry.modelId),
+            ),
+          ),
+        ),
+        models: nextModels,
         providerOrder: current.providerOrder,
       };
     });

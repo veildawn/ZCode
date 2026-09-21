@@ -21,6 +21,7 @@ import { Button } from "./components/ui/button.js";
 import { ZCodeAboutLogo } from "@/components/ui/ZCodeAboutLogo.js";
 import { useOAuth } from "./hooks/useOAuth.js";
 import { useZCodeIntl } from "./i18n/IntlProvider.js";
+import { LoginAiProxyForm } from "./login/LoginAiProxyForm.js";
 import { LoginApiKeyForm } from "./login/LoginApiKeyForm.js";
 import { renderOAuthProviderIcon } from "./lib/oauthProviderIcon.js";
 import { ThemeHeroVisual } from "./openWorkspacePageThemeHero.js";
@@ -89,7 +90,7 @@ function LoginPanel({ active, onComplete }: LoginPanelProps) {
   const loginEntryRequest = useZCodeStore((s) => s.loginEntryRequest);
   const clearLoginEntryRequest = useZCodeStore((s) => s.clearLoginEntryRequest);
   const markLoginEntryAttemptStatus = useZCodeStore((s) => s.markLoginEntryAttemptStatus);
-  const [loginMode, setLoginMode] = useState<"providers" | "apiKey">("providers");
+  const [loginMode, setLoginMode] = useState<"providers" | "apiKey" | "aiProxy">("providers");
   const wasActiveRef = useRef(active);
   const consumedLoginRequestRef = useRef<number | null>(null);
   const observedOAuthSuccessSeqRef = useRef(oauthSuccessSeq);
@@ -339,6 +340,23 @@ function LoginPanel({ active, onComplete }: LoginPanelProps) {
                   </Button>
                 ))}
                 <Button
+                  variant="default"
+                  className="h-10 w-full text-ui-base"
+                  size="lg"
+                  data-testid="oauth-login-button-ai-proxy"
+                  onClick={() => {
+                    setLoginMode("aiProxy");
+                  }}
+                >
+                  {renderOAuthProviderIcon("ai-proxy" as any, "size-4")}
+                  <span className="min-w-0 truncate">
+                    {intl.formatMessage({ id: "login.aiProxy.entry" })}
+                  </span>
+                  <span className="ml-1 inline-flex h-5 shrink-0 items-center rounded-full border border-primary-foreground/30 px-2 text-ui-xs font-medium leading-none text-primary-foreground/60">
+                    {intl.formatMessage({ id: "login.aiProxy.entryHint" })}
+                  </span>
+                </Button>
+                <Button
                   variant="outline"
                   className="h-10 w-full text-ui-base"
                   size="lg"
@@ -353,6 +371,20 @@ function LoginPanel({ active, onComplete }: LoginPanelProps) {
             ) : null}
           </div>
         )}
+
+        {status === "idle" && loginMode === "aiProxy" ? (
+          <LoginAiProxyForm
+            onCancel={() => setLoginMode("providers")}
+            onSaved={() => {
+              resetApiKeyForm();
+              return onComplete("apiKey");
+            }}
+            onSkipped={() => {
+              resetApiKeyForm();
+              return onComplete("skip");
+            }}
+          />
+        ) : null}
 
         {status === "idle" && loginMode === "apiKey" ? (
           <LoginApiKeyForm
