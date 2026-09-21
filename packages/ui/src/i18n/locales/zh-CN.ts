@@ -807,6 +807,8 @@ const zhCN: Record<string, string> = {
   "login.apiKey.placeholder": "输入 API key",
   "login.apiKey.providerLabel": "API key 提供方",
   "login.apiKey.provider.zai": "Z.ai",
+  "login.apiKey.provider.aiProxy": "AI Proxy",
+  "login.apiKey.baseUrl.aiProxy": "网关 BaseURL",
   "login.apiKey.provider.bigmodel": "BigModel",
   "login.apiKey.getApiKey": "获取 API Key",
   "login.apiKey.cancel": "取消",
