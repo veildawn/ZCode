@@ -220,7 +220,7 @@ export type ModelProviderNavItem =
       statusActive: boolean;
     };
 
-export type ModelProviderNavGroupId = "preset" | "custom";
+export type ModelProviderNavGroupId = "preset" | "custom" | "aiProxy";
 
 export interface ModelProviderNavGroup {
   id: ModelProviderNavGroupId;

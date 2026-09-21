@@ -12,8 +12,21 @@ export interface ProviderDraftValues {
 }
 
 function normalizeConfiguredBaseUrl(value: string): string {
-  const normalized = value.trim().replace(/\/+$/, "");
+  let normalized = value.trim().replace(/\/+$/, "");
   if (!normalized) return "";
+
+  // 针对自建 AI 网关 (aps.veildawn.com) 智能规范化：若仅输入主域名，自动追加 /v1
+  try {
+    const parsed = new URL(normalized);
+    if (
+      (parsed.hostname === "aps.veildawn.com" || parsed.hostname.endsWith(".aps.veildawn.com")) &&
+      (parsed.pathname === "" || parsed.pathname === "/")
+    ) {
+      normalized = `${parsed.protocol}//${parsed.host}/v1`;
+    }
+  } catch {
+    // ignore
+  }
 
   try {
     const parsed = new URL(normalized);

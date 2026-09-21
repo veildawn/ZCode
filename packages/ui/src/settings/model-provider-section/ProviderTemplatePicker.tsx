@@ -35,6 +35,10 @@ export function ProviderTemplatePicker({
   const { dismissFeedback, showFeedback } = useProviderDetailFeedback();
   const customLabel = intl.formatMessage({ id: "settings.modelProvider.newProviderName" });
   const zhipuIds = ["bigmodel-api", "zai-api", "bigmodel-standard-api", "zai-standard-api"];
+  const aiProxyTemplate = templates.find((t) => t.templateId === "ai-proxy");
+  const otherTemplates = templates.filter(
+    (t) => !zhipuIds.includes(t.templateId) && t.templateId !== "ai-proxy",
+  );
   const groups = [
     {
       id: "zhipu",
@@ -44,7 +48,7 @@ export function ProviderTemplatePicker({
     },
     {
       id: "other",
-      templates: templates.filter((template) => !zhipuIds.includes(template.templateId)),
+      templates: aiProxyTemplate ? [aiProxyTemplate, ...otherTemplates] : otherTemplates,
     },
   ] as const;
   const createWithFeedback = async (create: () => Promise<void>) => {
