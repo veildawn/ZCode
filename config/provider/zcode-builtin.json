@@ -5,6 +5,37 @@
     "providerConfigRules": {
       "templateRules": [
         {
+          "templateId": "ai-proxy",
+          "templateNameMap": {
+            "zh-CN": "AI Proxy",
+            "en-US": "AI Proxy"
+          },
+          "config": {
+            "access": {
+              "type": "api-key"
+            },
+            "api": {
+              "type": "openai-chat-completions",
+              "baseUrl": "https://aps.veildawn.com/v1"
+            },
+            "builtinModelIds": [
+              "glm-5.2",
+              "glm-5-turbo",
+              "claude-opus-4-8",
+              "claude-sonnet-5",
+              "gpt-5.6-sol",
+              "deepseek-v4-pro",
+              "kimi-for-coding",
+              "mimo-v2.5",
+              "gemini-3.8-flash"
+            ],
+            "logo": {
+              "type": "builtin",
+              "key": "ai-proxy"
+            }
+          }
+        },
+        {
           "templateId": "zai-api",
           "templateNameMap": {
             "zh-CN": "Z.ai Coding Plan",
@@ -4314,6 +4345,36 @@
         }
       ],
       "templateModelRules": [
+        {
+          "templateId": "ai-proxy",
+          "modelId": "glm-5.2",
+          "config": {
+            "enabled": true,
+            "stream": true,
+            "supportsVision": true,
+            "supportsJsonSchemaOutput": true
+          }
+        },
+        {
+          "templateId": "ai-proxy",
+          "modelId": "claude-opus-4-8",
+          "config": {
+            "enabled": true,
+            "stream": true,
+            "supportsVision": true,
+            "supportsJsonSchemaOutput": true
+          }
+        },
+        {
+          "templateId": "ai-proxy",
+          "modelId": "gpt-5.6-sol",
+          "config": {
+            "enabled": true,
+            "stream": true,
+            "supportsVision": true,
+            "supportsJsonSchemaOutput": true
+          }
+        },
         {
           "templateId": "opencode-go-chat",
           "modelId": "glm-5.3-flash",

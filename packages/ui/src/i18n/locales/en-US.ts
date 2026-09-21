@@ -886,6 +886,8 @@ const enUS: Record<string, string> = {
   "login.apiKey.placeholder": "Enter API key",
   "login.apiKey.providerLabel": "API key provider",
   "login.apiKey.provider.zai": "Z.ai",
+  "login.apiKey.provider.aiProxy": "AI Proxy",
+  "login.apiKey.baseUrl.aiProxy": "Gateway BaseURL",
   "login.apiKey.provider.bigmodel": "BigModel",
   "login.apiKey.getApiKey": "Get API Key",
   "login.apiKey.cancel": "Cancel",
