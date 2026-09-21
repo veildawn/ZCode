@@ -54,6 +54,7 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
   const [providerChoice, setProviderChoice] = useState<ApiKeyProviderChoice>(() =>
     resolveLoginApiKeyDefaultProvider(locale),
   );
+  const [baseUrlValue, setBaseUrlValue] = useState("https://aps.veildawn.com/v1");
   const [apiKeyValue, setApiKeyValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [skipping, setSkipping] = useState(false);
@@ -94,9 +95,37 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
         return;
       }
 
+      let normalizedBaseUrl = baseUrlValue.trim().replace(/\/+$/, "");
+      if (normalizedBaseUrl) {
+        try {
+          const parsed = new URL(normalizedBaseUrl);
+          if (
+            (parsed.hostname === "aps.veildawn.com" || parsed.hostname.endsWith(".aps.veildawn.com")) &&
+            (parsed.pathname === "" || parsed.pathname === "/")
+          ) {
+            normalizedBaseUrl = `${parsed.protocol}//${parsed.host}/v1`;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      const initialConfig: {
+        access: { type: typeof template.config.access.type; apiKey: string };
+        api?: { type: string; baseUrl: string };
+      } = {
+        access: { type: template.config.access.type, apiKey },
+      };
+      if (providerChoice === "ai-proxy") {
+        initialConfig.api = {
+          type: "openai-chat-completions",
+          baseUrl: normalizedBaseUrl || "https://aps.veildawn.com/v1",
+        };
+      }
+
       const created = await providerSettingsService.createPersonalProvider({
         templateId,
-        initialConfig: { access: { type: template.config.access.type, apiKey } },
+        initialConfig: initialConfig as any,
       });
       const defaultModelPreference = buildLoginApiKeyDefaultModelPreferenceFromSelection(
         await modelSelectionService.getView(),
@@ -193,9 +222,33 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
                     id: "login.apiKey.provider.bigmodel",
                   })}
                 </SelectItem>
+                <SelectItem
+                  value="ai-proxy"
+                  className="rounded-md"
+                  data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "ai-proxy")}
+                >
+                  {renderOAuthProviderIcon("ai-proxy" as any, "size-4")}
+                  {intl.formatMessage({
+                    id: "login.apiKey.provider.aiProxy",
+                  })}
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
+          {providerChoice === "ai-proxy" && (
+            <div className="space-y-1.5">
+              <label className="text-ui-xs text-muted-foreground">
+                {intl.formatMessage({ id: "login.apiKey.baseUrl.aiProxy" })}
+              </label>
+              <Input
+                value={baseUrlValue}
+                onChange={(e) => setBaseUrlValue(e.target.value)}
+                placeholder="https://aps.veildawn.com/v1"
+                disabled={busy}
+                className="h-10 text-ui-base"
+              />
+            </div>
+          )}
           <div className="relative">
             <Input
               id="login-api-key"
