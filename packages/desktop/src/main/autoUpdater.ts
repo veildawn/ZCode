@@ -8,6 +8,7 @@ import {
   getDesktopMenuMessage,
   PlatformChannels,
   resolveRuntimeZCodeEndpointOrigin,
+  ZCODE_PRODUCT_BRAND,
   ZCODE_VERSION,
   type ElectronReleaseChannel,
   type Locale,
@@ -749,6 +750,26 @@ async function syncAutoUpdateCheckChannelFromSettings(
   // 如果 begin 阶段仍用默认 stable 作为 expected channel，冷启动 preview 结果会被误判为 stale。
   availableUpdateChannel = nextChannel;
   activeAutoUpdateCheckChannel = nextChannel;
+}
+
+/**
+ * 下游发行版的更新源：本仓库自己的 GitHub Releases。
+ *
+ * electron-updater 的 github provider 直接读 release 资产里的 `latest*.yml` +
+ * 同目录安装包，因此流水线必须把 manifest 一起作为 release 资产发布（见 release.yml）。
+ */
+const DOWNSTREAM_UPDATE_RELEASE = Object.freeze({ owner: "veildawn", repo: "ZCode" });
+
+function applyDownstreamGithubUpdateProvider(): void {
+  autoUpdater.setFeedURL({
+    provider: "github",
+    owner: DOWNSTREAM_UPDATE_RELEASE.owner,
+    repo: DOWNSTREAM_UPDATE_RELEASE.repo,
+    releaseType: "release",
+  });
+  logger.info(
+    `[auto-update] downstream github provider applied owner=${DOWNSTREAM_UPDATE_RELEASE.owner} repo=${DOWNSTREAM_UPDATE_RELEASE.repo}`,
+  );
 }
 
 function applyManifestUpdateProvider(options: InitAutoUpdaterOptions): void {
@@ -1504,7 +1525,12 @@ export async function initAutoUpdater(options: InitAutoUpdaterOptions = {}): Pro
   // 这里仅在 Windows 关闭“退出即自动安装”，要求用户显式点更新；其他平台保持原有行为，避免改动既有升级链路。
   autoUpdater.autoInstallOnAppQuit = process.platform !== "win32";
   autoUpdater.logger = logger;
-  applyManifestUpdateProvider(options);
+  // 品牌身份（ZCode Gateway）走自己的 GitHub Releases；上游身份继续用服务端 manifest。
+  if (ZCODE_PRODUCT_BRAND) {
+    applyDownstreamGithubUpdateProvider();
+  } else {
+    applyManifestUpdateProvider(options);
+  }
 
   const triggerCheckForUpdates = (reason: string) => {
     if (checkForUpdatesInFlight) {

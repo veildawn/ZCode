@@ -68,6 +68,7 @@ import {
   type AppSettings,
   PlatformChannels,
   ZCODE_ENV,
+  ZCODE_PRODUCT_BRAND,
   ZCODE_PRODUCT_FLAVOR,
   DEFAULT_ZCODE_ENDPOINT_ORIGIN,
   DEFAULT_LOCALE,
@@ -1978,7 +1979,11 @@ app.whenReady().then(async () => {
     // 打包态必须与 NSIS 快捷方式使用同一 AUMID，否则 Shell 把它们当成不同应用。
     // 使用构建期产品身份，不依赖用户机器环境；开发态继续保持独立身份。
     app.setAppUserModelId(
-      resolveWindowsAppUserModelIdForFlavor(ZCODE_PRODUCT_FLAVOR, { isPackaged: app.isPackaged }),
+      resolveWindowsAppUserModelIdForFlavor(
+        ZCODE_PRODUCT_FLAVOR,
+        { isPackaged: app.isPackaged },
+        ZCODE_PRODUCT_BRAND,
+      ),
     );
   }
 
@@ -2013,7 +2018,9 @@ app.whenReady().then(async () => {
   // Preview 身份无论连接哪个后端都不自动更新：stable feed 上只分发正式 ZCode 安装包，
   // 不向 Preview 渠道提供更新。
   void initAutoUpdater({
-    enabled: ZCODE_PRODUCT_FLAVOR === "production",
+    // 品牌身份（ZCode Gateway）自带更新源（本仓库 GitHub Releases），因此不受上游
+    // "只有 production 身份才有更新器" 的限制；未品牌的构建继续按 flavor 判断。
+    enabled: ZCODE_PRODUCT_BRAND || ZCODE_PRODUCT_FLAVOR === "production",
     onBeforeQuitAndInstall: async () => {
       notifyStabilityLifecycle("update_install");
       await prepareAppQuit("auto-update quitAndInstall", "update-install");

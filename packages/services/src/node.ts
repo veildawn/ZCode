@@ -167,6 +167,9 @@ export type {
   ProviderRuntimeDependencies,
   ProviderRuntimeOptions,
 } from "./model-provider/providerRuntime.js";
+import { readAiProxyCatalog } from "./model-provider/aiProxyModelCatalog.js";
+export type { AiProxyCatalogEntry } from "./model-provider/aiProxyModelCatalog.js";
+
 export {
   createProviderProvisioningSource,
   listProviderProvisioningCredentialKeys,
@@ -1619,9 +1622,22 @@ export function createLocalServices(options: {
   let providerConnectivityAgentService:
     | Pick<IZCodeAgentService, "testModelConnectivity">
     | undefined;
+  // 网关模型目录取数：走宿主网络栈（企业代理 / 自签 CA 与其它 Provider 请求同源），
+  // 由 Renderer 之外的这一层发请求，避免把用户的网关密钥暴露给页面上下文。
+  const fetchAiProxyCatalog = async (input: { baseUrl: string; apiKey: string }) => {
+    const url = `${input.baseUrl.replace(/\/+$/, "")}/models`;
+    const response = await apiClient.request(url, {
+      headers: { authorization: `Bearer ${input.apiKey}`, accept: "application/json" },
+    });
+    if (!response.ok) {
+      throw new Error(`网关模型目录不可用（HTTP ${response.status}）`);
+    }
+    return readAiProxyCatalog(await response.json());
+  };
   const providerRuntime = createProviderRuntimeFromConfigRuntime({
     configRuntime: providerConfigRuntime,
     accountSource: accountProviderConfigSource,
+    fetchAiProxyCatalog,
     modelSelectionConfiguredDefaultSource,
     disposeModelSelectionConfiguredDefaultSource: () =>
       modelSelectionConfiguredDefaultSource.dispose(),

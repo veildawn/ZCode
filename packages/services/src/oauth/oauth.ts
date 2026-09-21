@@ -8,6 +8,7 @@ import type {
 } from "@zcode/shared";
 import { ServiceChannels } from "@zcode/shared";
 import { createServiceDescriptor } from "../descriptors.js";
+import type { AiProxyOAuthPollResult, AiProxyOAuthStartResponse } from "./aiProxyOAuth.js";
 
 /**
  * OAuth 认证服务
@@ -70,6 +71,23 @@ export interface IOAuthService {
    * @param provider - 可选；不传时取消当前 pending
    */
   cancelPending(provider?: OAuthProviderId): Promise<void>;
+
+  /**
+   * 发起 AI Proxy 网关的 OAuth 登录（授权码 + PKCE）。
+   *
+   * 授权服务器是用户自填的网关自己，与智谱账号登录无关：宿主在 127.0.0.1
+   * 上绑一个临时端口回收授权码，调用方只负责用系统浏览器打开 authorizeUrl。
+   */
+  startAiProxyOAuthLogin(baseUrl: string): Promise<AiProxyOAuthStartResponse>;
+
+  /**
+   * 轮询 AI Proxy 网关 OAuth 结果：浏览器还没回调时返回 null，
+   * 回调到达后由宿主兑换令牌并返回结果。
+   */
+  pollAiProxyOAuthLogin(flowId: string): Promise<AiProxyOAuthPollResult | null>;
+
+  /** 取消 AI Proxy 网关 OAuth 登录并释放回环端口。 */
+  cancelAiProxyOAuthLogin(flowId?: string): Promise<void>;
 }
 
 export const IOAuthService = createServiceDescriptor<IOAuthService>(ServiceChannels.OAuth);

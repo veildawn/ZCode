@@ -8,6 +8,8 @@ export type ArmsRumEnv = "local" | "prod";
 // 非构建环境（如 e2e 测试的 mocha）下 define 不存在，用 typeof 检查 + fallback 避免 ReferenceError
 declare const __ZCODE_ENV__: string;
 declare const __ZCODE_PRODUCT_FLAVOR__: string;
+/** 下游品牌开关（编译期注入）：真时安装包使用本仓库自己的产品名与包名。 */
+declare const __ZCODE_PRODUCT_BRAND__: string;
 
 export function normalizeZCodeEnv(value: string | undefined): ZCodeEnv {
   return value?.trim().toLowerCase() === "production" ? "production" : "test";
@@ -37,6 +39,13 @@ export const ZCODE_PRODUCT_FLAVOR = normalizeZCodeProductFlavor(
   typeof __ZCODE_PRODUCT_FLAVOR__ !== "undefined" ? __ZCODE_PRODUCT_FLAVOR__ : undefined,
   ZCODE_ENV,
 );
+/**
+ * 下游品牌：与 flavor 分轴。flavor 决定更新器/签名门/菜单语义，品牌决定用户看到的名字。
+ * 未注入 define 的 bundle（web、CLI、测试）保持上游身份。
+ */
+export const ZCODE_PRODUCT_BRAND =
+  typeof __ZCODE_PRODUCT_BRAND__ !== "undefined" && __ZCODE_PRODUCT_BRAND__.trim() === "1";
+
 export const ZCODE_APP_VERSION_ENV = "ZCODE_APP_VERSION" as const;
 export const ZCODE_BUILD_COMMIT_ID_ENV = "ZCODE_BUILD_COMMIT_ID" as const;
 

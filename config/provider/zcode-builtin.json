@@ -15,20 +15,9 @@
               "type": "api-key"
             },
             "api": {
-              "type": "openai-chat-completions",
-              "baseUrl": "https://aps.veildawn.com/v1"
+              "type": "openai-chat-completions"
             },
-            "builtinModelIds": [
-              "glm-5.2",
-              "glm-5-turbo",
-              "claude-opus-4-8",
-              "claude-sonnet-5",
-              "gpt-5.6-sol",
-              "deepseek-v4-pro",
-              "kimi-for-coding",
-              "mimo-v2.5",
-              "gemini-3.8-flash"
-            ],
+            "builtinModelIds": [],
             "logo": {
               "type": "builtin",
               "key": "ai-proxy"
@@ -4350,9 +4339,13 @@
           "modelId": "glm-5.2",
           "config": {
             "enabled": true,
-            "stream": true,
-            "supportsVision": true,
-            "supportsJsonSchemaOutput": true
+            "properties": {
+              "inputFormat": {
+                "supportsText": true,
+                "supportsImage": true
+              },
+              "supportsJsonSchemaOutput": true
+            }
           }
         },
         {
@@ -4360,9 +4353,13 @@
           "modelId": "claude-opus-4-8",
           "config": {
             "enabled": true,
-            "stream": true,
-            "supportsVision": true,
-            "supportsJsonSchemaOutput": true
+            "properties": {
+              "inputFormat": {
+                "supportsText": true,
+                "supportsImage": true
+              },
+              "supportsJsonSchemaOutput": true
+            }
           }
         },
         {
@@ -4370,9 +4367,13 @@
           "modelId": "gpt-5.6-sol",
           "config": {
             "enabled": true,
-            "stream": true,
-            "supportsVision": true,
-            "supportsJsonSchemaOutput": true
+            "properties": {
+              "inputFormat": {
+                "supportsText": true,
+                "supportsImage": true
+              },
+              "supportsJsonSchemaOutput": true
+            }
           }
         },
         {

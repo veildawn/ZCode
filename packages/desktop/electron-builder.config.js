@@ -459,10 +459,12 @@ export default {
   extraMetadata: {
     version: buildMetadata.appVersion,
     zcodeProductFlavor: desktopProductIdentity.flavor,
-    homepage: "https://zcode.z.ai",
+    // Linux 打包（fpm）会把 homepage/author 写进包元数据；下游品牌身份给出自己的值，
+    // 没有品牌时保持上游的身份字段。
+    homepage: desktopProductIdentity.homepage ?? "https://zcode.z.ai",
     author: {
-      name: "ZCode",
-      email: "dev@zcode.z.ai",
+      name: desktopProductIdentity.authorName ?? "ZCode",
+      email: desktopProductIdentity.authorEmail ?? "dev@zcode.z.ai",
     },
   },
   // macOS 签名阶段会对 Electron Framework 下每个语言包逐个 codesign。

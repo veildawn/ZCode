@@ -22,7 +22,15 @@ import {
   TID_MODEL_PROVIDER_NAME_INPUT,
   testId,
 } from "@zcode/shared";
-import { InfoIcon, LockKeyholeIcon, Plus, Pencil, Trash2, MoreHorizontal } from "lucide-react";
+import {
+  InfoIcon,
+  LockKeyholeIcon,
+  Plus,
+  Pencil,
+  RefreshCw,
+  Trash2,
+  MoreHorizontal,
+} from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
 import {
@@ -350,6 +358,8 @@ export function ProviderModelsSection({
   providerAccess,
   models,
   onTestModel,
+  onRefreshModels,
+  refreshingModels = false,
   onModelCommit,
   onModelEnabledChange,
   onDeleteModel,
@@ -363,6 +373,9 @@ export function ProviderModelsSection({
   providerAccess?: ProviderConfigObject["access"];
   models: ProviderSettingsFormModel[];
   onTestModel?: (model: string) => Promise<ModelConnectivityResult>;
+  /** 从外部目录（网关 /v1/models）刷新整个模型列表与参数；仅网关供应商提供。 */
+  onRefreshModels?: () => void | Promise<void>;
+  refreshingModels?: boolean;
   onModelCommit: (
     originalModelId: string,
     model: ProviderSettingsFormModel,
@@ -470,17 +483,39 @@ export function ProviderModelsSection({
         <span className="text-ui-base text-foreground-subtle">
           {intl.formatMessage({ id: "settings.modelProvider.models" })}
         </span>
-        <Button
-          type="button"
-          variant="secondary"
-          size="default"
-          className="rounded-lg"
-          data-testid={TID_MODEL_PROVIDER_ADD_MODEL_BUTTON}
-          onClick={openAddDialog}
-        >
-          <Plus data-icon="inline-start" aria-hidden="true" />
-          {intl.formatMessage({ id: "settings.modelProvider.addModel" })}
-        </Button>
+        <div className="flex items-center gap-2">
+          {onRefreshModels ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="default"
+              className="rounded-lg"
+              data-testid="model-provider-refresh-models-button"
+              disabled={refreshingModels}
+              onClick={() => {
+                void onRefreshModels();
+              }}
+            >
+              <RefreshCw
+                data-icon="inline-start"
+                aria-hidden="true"
+                className={refreshingModels ? "animate-spin" : undefined}
+              />
+              {intl.formatMessage({ id: "settings.modelProvider.refreshModels" })}
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="secondary"
+            size="default"
+            className="rounded-lg"
+            data-testid={TID_MODEL_PROVIDER_ADD_MODEL_BUTTON}
+            onClick={openAddDialog}
+          >
+            <Plus data-icon="inline-start" aria-hidden="true" />
+            {intl.formatMessage({ id: "settings.modelProvider.addModel" })}
+          </Button>
+        </div>
       </div>
       {models.length > 0 ? (
         <div className="overflow-hidden rounded-lg border border-input-border bg-input">
