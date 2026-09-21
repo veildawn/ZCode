@@ -1,0 +1,7 @@
+.DS_Store
+.zcode-src/
+node_modules/
+dist/
+release-artifacts/
+final-dist/
+*.log

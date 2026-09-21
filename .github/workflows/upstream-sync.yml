@@ -1,0 +1,208 @@
+name: Real-Time Upstream Sync & Auto-Release
+
+on:
+  schedule:
+    # 每 30 分钟高频轮询检测官方发版动态
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_sync:
+        description: 'Force sync and rebuild even if no new tag detected'
+        type: boolean
+        default: false
+      specific_tag:
+        description: 'Specific upstream tag to sync (optional, e.g. v3.15.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  check-upstream:
+    name: Check Upstream Release Cadence
+    runs-on: ubuntu-latest
+    outputs:
+      has_update: ${{ steps.compare.outputs.has_update }}
+      sync_target_type: ${{ steps.compare.outputs.sync_target_type }}
+      target_ref: ${{ steps.compare.outputs.target_ref }}
+      target_version: ${{ steps.compare.outputs.target_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare Upstream with Downstream
+        id: compare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          UPSTREAM_REPO="zai-org/ZCode"
+          MY_REPO="${{ github.repository }}"
+
+          echo "Querying official upstream releases & tags from ${UPSTREAM_REPO}..."
+          
+          # 1. 查询官方最新 Release Tag
+          UPSTREAM_LATEST_TAG=$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq .tag_name 2>/dev/null || echo "")
+          if [ -z "$UPSTREAM_LATEST_TAG" ]; then
+            UPSTREAM_LATEST_TAG=$(gh api "repos/${UPSTREAM_REPO}/tags" --jq '.[0].name' 2>/dev/null || echo "")
+          fi
+
+          # 2. 查询当前仓库已发布的最新 Release Tag
+          MY_LATEST_TAG=$(gh api "repos/${MY_REPO}/releases/latest" --jq .tag_name 2>/dev/null || echo "")
+
+          # 3. 查询官方主分支最新 Commit SHA
+          UPSTREAM_MAIN_SHA=$(gh api "repos/${UPSTREAM_REPO}/commits/main" --jq .sha 2>/dev/null || echo "")
+          
+          echo "Official Latest Tag: [${UPSTREAM_LATEST_TAG}]"
+          echo "Downstream Latest Tag: [${MY_LATEST_TAG}]"
+          echo "Official Main SHA:   [${UPSTREAM_MAIN_SHA}]"
+
+          SPECIFIC_TAG="${{ github.event.inputs.specific_tag }}"
+          FORCE_SYNC="${{ github.event.inputs.force_sync }}"
+
+          if [ -n "$SPECIFIC_TAG" ]; then
+            echo "Manual trigger: syncing specific tag ${SPECIFIC_TAG}"
+            echo "has_update=true" >> $GITHUB_OUTPUT
+            echo "sync_target_type=tag" >> $GITHUB_OUTPUT
+            echo "target_ref=${SPECIFIC_TAG}" >> $GITHUB_OUTPUT
+            echo "target_version=${SPECIFIC_TAG}" >> $GITHUB_OUTPUT
+          elif [ "$FORCE_SYNC" = "true" ]; then
+            echo "Manual trigger: force sync enabled"
+            echo "has_update=true" >> $GITHUB_OUTPUT
+            echo "sync_target_type=tag" >> $GITHUB_OUTPUT
+            echo "target_ref=${UPSTREAM_LATEST_TAG:-main}" >> $GITHUB_OUTPUT
+            echo "target_version=${UPSTREAM_LATEST_TAG:-v3.14.0}" >> $GITHUB_OUTPUT
+          elif [ -n "$UPSTREAM_LATEST_TAG" ] && [ "$UPSTREAM_LATEST_TAG" != "$MY_LATEST_TAG" ]; then
+            echo "🚀 New official release detected: ${UPSTREAM_LATEST_TAG} (current: ${MY_LATEST_TAG})"
+            echo "has_update=true" >> $GITHUB_OUTPUT
+            echo "sync_target_type=tag" >> $GITHUB_OUTPUT
+            echo "target_ref=${UPSTREAM_LATEST_TAG}" >> $GITHUB_OUTPUT
+            echo "target_version=${UPSTREAM_LATEST_TAG}" >> $GITHUB_OUTPUT
+          else
+            echo "✓ Downstream is already up to date with official release cadence."
+            echo "has_update=false" >> $GITHUB_OUTPUT
+          fi
+
+  sync-and-patch:
+    name: Apply Patches, Verify & Tag Release
+    needs: check-upstream
+    if: needs.check-upstream.outputs.has_update == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git Author Identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add Official Upstream Remote & Fetch
+        run: |
+          git remote add upstream https://github.com/zai-org/ZCode.git || true
+          git fetch upstream --tags --prune
+          git fetch origin main
+
+      - name: Update upstream-mirror Branch
+        run: |
+          git branch -f upstream-mirror upstream/main
+          git push origin upstream-mirror --force || echo "Mirror branch push skipped or not permitted"
+
+      - name: Prepare Clean Sync Workspace
+        id: prep
+        run: |
+          TARGET_REF="${{ needs.check-upstream.outputs.target_ref }}"
+          TARGET_VER="${{ needs.check-upstream.outputs.target_version }}"
+          echo "Syncing target: ${TARGET_REF} (${TARGET_VER})"
+
+          # 创建临时同步工作分支
+          if git rev-parse "upstream/${TARGET_REF}" &>/dev/null; then
+            git checkout -b "sync-release-${TARGET_VER}" "upstream/${TARGET_REF}"
+          elif git rev-parse "refs/tags/${TARGET_REF}" &>/dev/null; then
+            git checkout -b "sync-release-${TARGET_VER}" "refs/tags/${TARGET_REF}"
+          else
+            git checkout -b "sync-release-${TARGET_VER}" upstream/main
+          fi
+
+          # 提取 main 分支最新的 downstream-patches
+          git checkout origin/main -- downstream-patches/
+          git checkout origin/main -- .github/
+          git checkout origin/main -- scripts/
+
+      - name: Apply Downstream Patches (3-Way Merge)
+        id: apply_patches
+        run: |
+          echo "Applying patches from downstream-patches/..."
+          shopt -s nullglob
+          PATCHES=(downstream-patches/*.patch)
+          shopt -u nullglob
+
+          if [ ${#PATCHES[@]} -eq 0 ]; then
+            echo "No downstream patches found."
+            exit 0
+          fi
+
+          for patch in "${PATCHES[@]}"; do
+            echo "--> Applying ${patch}..."
+            if ! git am --3way --keep-cr "${patch}"; then
+              echo "::error::Patch application failed on ${patch}"
+              git am --abort 2>/dev/null || true
+              exit 1
+            fi
+          done
+          echo "All downstream patches applied successfully."
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Typecheck Verification Gate
+        run: pnpm typecheck
+
+      - name: Lint Verification Gate
+        run: pnpm lint
+
+      - name: Push to Main & Create Release Tag
+        run: |
+          TARGET_VER="${{ needs.check-upstream.outputs.target_version }}"
+          echo "Merging synced release to origin/main..."
+
+          # 将打好补丁的代码合并或重置至 main 分支
+          git checkout -B main
+          git push origin main --force-with-lease || git push origin main
+
+          # 打上版本 Tag 并推送，触发跨平台打包工作流 (release.yml)
+          if ! git rev-parse "refs/tags/${TARGET_VER}" &>/dev/null; then
+            echo "Tagging ${TARGET_VER} and pushing to trigger release.yml..."
+            git tag -a "${TARGET_VER}" -m "Official release sync ${TARGET_VER} with AI Proxy Gateway"
+            git push origin "${TARGET_VER}"
+          else
+            echo "Tag ${TARGET_VER} already exists locally or remotely."
+          fi
+
+      - name: Report Sync Conflict Failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TARGET_VER="${{ needs.check-upstream.outputs.target_version }}"
+          gh issue create \
+            --title "🚨 Upstream Sync Patch Conflict on ${TARGET_VER}" \
+            --body "官方上游发布了新版本 ${TARGET_VER}，但在自动应用下游补丁时检测到代码冲突，或者未通过自动化门禁。请在本地检出冲突进行处理。" || true
