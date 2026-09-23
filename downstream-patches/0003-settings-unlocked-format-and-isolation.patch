@@ -1,0 +1,151 @@
+From e1cbac4dfcca23f7b304c92a8ee77365d17a8e23 Mon Sep 17 00:00:00 2001
+From: Veildawn <dev@veildawn.cn>
+Date: Mon, 21 Sep 2026 11:47:12 +0800
+Subject: [PATCH 3/3] feat(settings): unlock API format editing and isolate AI
+ Proxy from custom providers
+
+---
+ .../model-provider-section/Detail.tsx         |  7 ++++-
+ .../ProviderDraftSave.ts                      | 15 +++++++++-
+ .../ProviderTemplatePicker.tsx                |  6 +++-
+ .../model-provider-section/constants.ts       |  2 +-
+ .../useModelProviderNavigation.ts             | 30 ++++++++++++++++++-
+ 5 files changed, 55 insertions(+), 5 deletions(-)
+
+diff --git a/packages/ui/src/settings/model-provider-section/Detail.tsx b/packages/ui/src/settings/model-provider-section/Detail.tsx
+index 627e9b0..8118212 100644
+--- a/packages/ui/src/settings/model-provider-section/Detail.tsx
++++ b/packages/ui/src/settings/model-provider-section/Detail.tsx
+@@ -426,7 +426,12 @@ export function ModelProviderSectionDetail({
+               : undefined
+           }
+           onTestModel={onTestModel}
+-          readOnlyEndpoints
++          readOnlyEndpoints={
++            presetProvider.templateId === "ai-proxy" ||
++            presetProvider.providerId.startsWith("ai-proxy")
++              ? false
++              : true
++          }
+           // 预置供应商名称承载固定 API Key 入口语义，
+           // 允许重命名会让侧边栏和模型选择器展示含义不一致，因此只允许自定义供应商改名。
+           nameEditable={false}
+diff --git a/packages/ui/src/settings/model-provider-section/ProviderDraftSave.ts b/packages/ui/src/settings/model-provider-section/ProviderDraftSave.ts
+index 5a0500b..ce7537a 100644
+--- a/packages/ui/src/settings/model-provider-section/ProviderDraftSave.ts
++++ b/packages/ui/src/settings/model-provider-section/ProviderDraftSave.ts
+@@ -12,9 +12,22 @@ export interface ProviderDraftValues {
+ }
+ 
+ function normalizeConfiguredBaseUrl(value: string): string {
+-  const normalized = value.trim().replace(/\/+$/, "");
++  let normalized = value.trim().replace(/\/+$/, "");
+   if (!normalized) return "";
+ 
++  // 针对自建 AI 网关 (aps.veildawn.com) 智能规范化：若仅输入主域名，自动追加 /v1
++  try {
++    const parsed = new URL(normalized);
++    if (
++      (parsed.hostname === "aps.veildawn.com" || parsed.hostname.endsWith(".aps.veildawn.com")) &&
++      (parsed.pathname === "" || parsed.pathname === "/")
++    ) {
++      normalized = `${parsed.protocol}//${parsed.host}/v1`;
++    }
++  } catch {
++    // ignore
++  }
++
+   try {
+     const parsed = new URL(normalized);
+     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return normalized;
+diff --git a/packages/ui/src/settings/model-provider-section/ProviderTemplatePicker.tsx b/packages/ui/src/settings/model-provider-section/ProviderTemplatePicker.tsx
+index 96f2f1c..1d89cdf 100644
+--- a/packages/ui/src/settings/model-provider-section/ProviderTemplatePicker.tsx
++++ b/packages/ui/src/settings/model-provider-section/ProviderTemplatePicker.tsx
+@@ -35,6 +35,10 @@ export function ProviderTemplatePicker({
+   const { dismissFeedback, showFeedback } = useProviderDetailFeedback();
+   const customLabel = intl.formatMessage({ id: "settings.modelProvider.newProviderName" });
+   const zhipuIds = ["bigmodel-api", "zai-api", "bigmodel-standard-api", "zai-standard-api"];
++  const aiProxyTemplate = templates.find((t) => t.templateId === "ai-proxy");
++  const otherTemplates = templates.filter(
++    (t) => !zhipuIds.includes(t.templateId) && t.templateId !== "ai-proxy",
++  );
+   const groups = [
+     {
+       id: "zhipu",
+@@ -44,7 +48,7 @@ export function ProviderTemplatePicker({
+     },
+     {
+       id: "other",
+-      templates: templates.filter((template) => !zhipuIds.includes(template.templateId)),
++      templates: aiProxyTemplate ? [aiProxyTemplate, ...otherTemplates] : otherTemplates,
+     },
+   ] as const;
+   const createWithFeedback = async (create: () => Promise<void>) => {
+diff --git a/packages/ui/src/settings/model-provider-section/constants.ts b/packages/ui/src/settings/model-provider-section/constants.ts
+index 8dc4270..3c51059 100644
+--- a/packages/ui/src/settings/model-provider-section/constants.ts
++++ b/packages/ui/src/settings/model-provider-section/constants.ts
+@@ -220,7 +220,7 @@ export type ModelProviderNavItem =
+       statusActive: boolean;
+     };
+ 
+-export type ModelProviderNavGroupId = "preset" | "custom";
++export type ModelProviderNavGroupId = "preset" | "custom" | "aiProxy";
+ 
+ export interface ModelProviderNavGroup {
+   id: ModelProviderNavGroupId;
+diff --git a/packages/ui/src/settings/model-provider-section/useModelProviderNavigation.ts b/packages/ui/src/settings/model-provider-section/useModelProviderNavigation.ts
+index 37bab93..355bc2c 100644
+--- a/packages/ui/src/settings/model-provider-section/useModelProviderNavigation.ts
++++ b/packages/ui/src/settings/model-provider-section/useModelProviderNavigation.ts
+@@ -89,6 +89,19 @@ export function useModelProviderNavigation({
+     return sortModelProvidersForDisplay(allCustomProviders, displayOrder);
+   }, [displayOrder, modelProviders]);
+ 
++  const aiProxyProviders = useMemo(() => {
++    return customProviders.filter(
++      (provider) =>
++        provider.templateId === "ai-proxy" ||
++        provider.providerId === "ai-proxy" ||
++        provider.providerId.startsWith("ai-proxy:"),
++    );
++  }, [customProviders]);
++
++  const regularCustomProviders = useMemo(() => {
++    return customProviders.filter((provider) => !aiProxyProviders.includes(provider));
++  }, [customProviders, aiProxyProviders]);
++
+   const codingPlanItems = useMemo(
+     () =>
+       CODING_PLAN_PROVIDER_SPECS.filter((spec) =>
+@@ -210,10 +223,25 @@ export function useModelProviderNavigation({
+           ...codingPlanItems.filter((item) => isStartPlanModelProviderId(item.presetId)),
+         ],
+       },
++      ...(aiProxyProviders.length > 0
++        ? [
++            {
++              id: "aiProxy" as const,
++              title: "AI Proxy",
++              items: aiProxyProviders.map((provider) => ({
++                key: createCustomProviderNodeKey(provider.providerId),
++                type: "custom" as const,
++                label: getProviderFormLabel(provider),
++                provider,
++                statusActive: provider.executable === true,
++              })),
++            },
++          ]
++        : []),
+       {
+         id: "custom",
+         title: intl.formatMessage({ id: "settings.modelProvider.customTitle" }),
+-        items: customProviders.map((provider) => ({
++        items: regularCustomProviders.map((provider) => ({
+           key: createCustomProviderNodeKey(provider.providerId),
+           type: "custom" as const,
+           label: getProviderFormLabel(provider),
+-- 
+2.50.1 (Apple Git-155)
+

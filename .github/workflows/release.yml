@@ -1,0 +1,235 @@
+name: Build & Release Cross-Platform Desktop Installers
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag Name (e.g. v3.14.0)'
+        required: true
+        default: 'v3.14.0'
+      release_name:
+        description: 'Release Title'
+        required: false
+        default: 'ZCode with AI Proxy Gateway v3.14.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-matrix:
+    name: Build (${{ matrix.platform_name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target_os: mac
+            target_arch: arm64
+            platform_name: macOS Apple Silicon (ARM64)
+            artifact_name: zcode-macos-arm64
+            artifact_glob: |
+              zcode-src/packages/desktop/dist/*-arm64*.dmg
+              zcode-src/packages/desktop/dist/*-arm64*.zip
+              zcode-src/packages/desktop/dist/latest-mac.yml
+          - os: macos-latest
+            target_os: mac
+            target_arch: x64
+            platform_name: macOS Intel (x64)
+            artifact_name: zcode-macos-x64
+            artifact_glob: |
+              zcode-src/packages/desktop/dist/*-x64*.dmg
+              zcode-src/packages/desktop/dist/*-x64*.zip
+              zcode-src/packages/desktop/dist/latest-mac.yml
+          - os: windows-latest
+            target_os: win
+            target_arch: x64
+            platform_name: Windows (x64)
+            artifact_name: zcode-windows-x64
+            artifact_glob: |
+              zcode-src/packages/desktop/dist/*.exe
+              zcode-src/packages/desktop/dist/latest.yml
+          - os: ubuntu-latest
+            target_os: linux
+            target_arch: x64
+            platform_name: Linux (x64)
+            artifact_name: zcode-linux-x64
+            artifact_glob: |
+              zcode-src/packages/desktop/dist/*.AppImage
+              zcode-src/packages/desktop/dist/*.deb
+              zcode-src/packages/desktop/dist/latest-linux.yml
+    steps:
+      - name: Checkout meta-repo
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools desktop-file-utils
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Resolve Target Tag
+        id: vars
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Clone Upstream ZCode & Apply Patches
+        shell: bash
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          echo "Cloning upstream tag: ${TAG}"
+          git config --global core.autocrlf false
+          rm -rf zcode-src
+          if ! git clone --depth 1 --branch "${TAG}" https://github.com/zai-org/ZCode.git zcode-src; then
+            echo "Upstream tag ${TAG} not found, falling back to upstream main branch..."
+            rm -rf zcode-src
+            git clone --depth 1 https://github.com/zai-org/ZCode.git zcode-src
+          fi
+
+          if [ -d "downstream-patches/assets" ]; then
+            echo "Copying brand assets..."
+            mkdir -p zcode-src/packages/ui/src/assets/provider-icons
+            cp -f downstream-patches/assets/* zcode-src/packages/ui/src/assets/provider-icons/
+          fi
+
+          cd zcode-src
+          for patch in ../downstream-patches/*.patch; do
+            echo "Applying $(basename "$patch")..."
+            git apply --3way --ignore-whitespace --ignore-space-change "$patch"
+          done
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('zcode-src/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Cache Electron & Electron-Builder binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            AppData/Local/electron/Cache
+            AppData/Local/electron-builder/Cache
+          key: ${{ runner.os }}-electron-cache-${{ matrix.target_arch }}
+          restore-keys: |
+            ${{ runner.os }}-electron-cache-
+
+      - name: Install dependencies
+        working-directory: zcode-src
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Build bootstrap & packages
+        working-directory: zcode-src
+        run: pnpm build:bootstrap
+
+      - name: Build Desktop Package (${{ matrix.platform_name }})
+        working-directory: zcode-src
+        shell: bash
+        run: pnpm bundle:desktop -- --os ${{ matrix.target_os }} --arch ${{ matrix.target_arch }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          # 下游品牌身份（ZCode Gateway）：产品名 / appId / Linux 包名与官方 ZCode 分离。
+          # flavor 仍由 ZCODE_ENV 决定，这里只换名字，官方 manifest 更新器保持关闭。
+          ZCODE_PRODUCT_BRAND: "1"
+
+      - name: Upload Platform Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: error
+
+  create-release:
+    name: Create GitHub Release & Publish Installers
+    needs: build-matrix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout meta-repo
+        uses: actions/checkout@v4
+
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Prepare release assets directory
+        run: |
+          mkdir -p final-dist mac-manifests
+          find release-artifacts -type f -exec cp {} final-dist/ \;
+          # 两个 macOS 架构各自产出一份 latest-mac.yml（只描述自己那半）。先按架构留档，
+          # 后面合并成一份同时覆盖 arm64 与 x64 的 manifest——否则后上传的那份会覆盖前者，
+          # 另一个架构的客户端就拿到不匹配的下载地址。
+          if [ -f release-artifacts/zcode-macos-arm64/latest-mac.yml ]; then
+            cp release-artifacts/zcode-macos-arm64/latest-mac.yml mac-manifests/latest-mac-arm64.yml
+          fi
+          if [ -f release-artifacts/zcode-macos-x64/latest-mac.yml ]; then
+            cp release-artifacts/zcode-macos-x64/latest-mac.yml mac-manifests/latest-mac-x64.yml
+          fi
+          ls -lh final-dist/ mac-manifests/
+
+      - name: Merge macOS update manifests
+        run: node scripts/merge-macos-update-manifest.mjs mac-manifests final-dist/latest-mac.yml
+
+      - name: Resolve Release Tag & Title
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+            echo "title=${{ github.event.inputs.release_name }}" >> $GITHUB_OUTPUT
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "tag=${TAG}" >> $GITHUB_OUTPUT
+            echo "title=ZCode ${TAG} (AI Proxy Edition)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: ${{ steps.vars.outputs.title }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            final-dist/*.dmg
+            final-dist/*.zip
+            final-dist/*.exe
+            final-dist/*.AppImage
+            final-dist/*.deb
+            final-dist/*.blockmap
+            final-dist/latest.yml
+            final-dist/latest-mac.yml
+            final-dist/latest-linux.yml
+            final-dist/latest*.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

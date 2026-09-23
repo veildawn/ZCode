@@ -1,0 +1,420 @@
+name: Real-Time Upstream Sync & Auto-Release
+
+on:
+  schedule:
+    # 每 30 分钟高频轮询检测官方发版动态
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_sync:
+        description: 'Force sync and rebuild even if no new upstream tag/commit detected'
+        type: boolean
+        default: false
+      specific_tag:
+        description: 'Specific upstream tag to sync (optional, e.g. v3.15.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+# 串行执行：定时轮询与手动触发不会互相覆盖 tag / main 上的同步状态
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  check-upstream:
+    name: Check Upstream Release Cadence
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      has_update: ${{ steps.compare.outputs.has_update }}
+      sync_reason: ${{ steps.compare.outputs.sync_reason }}
+      target_ref: ${{ steps.compare.outputs.target_ref }}
+      target_commit: ${{ steps.compare.outputs.target_commit }}
+      target_version: ${{ steps.compare.outputs.target_version }}
+      upstream_tag: ${{ steps.compare.outputs.upstream_tag }}
+      upstream_main_sha: ${{ steps.compare.outputs.upstream_main_sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch downstream tags
+        run: git fetch --tags --force origin
+
+      - name: Compare Upstream with Downstream
+        id: compare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_REPO: zai-org/ZCode
+          UPSTREAM_BRANCH: main
+          MY_REPO: ${{ github.repository }}
+          STATE_FILE: .github/upstream-sync-state.json
+          SPECIFIC_TAG: ${{ github.event.inputs.specific_tag }}
+          FORCE_SYNC: ${{ github.event.inputs.force_sync }}
+        run: |
+          set -euo pipefail
+
+          # gh api 失败（例如 404）时会把错误 JSON 打到 stdout：直接写
+          # $(gh api ...) 会把 {"message":"Not Found",...} 当成 tag 一路传下去，
+          # 后续 shell 被引号截断后炸成 exit 127。这里只接受退出码为 0 的响应，
+          # 并对所有取回的值做格式校验 / 折行清理。
+          gh_get() {
+            local url="$1" filter="$2" out
+            if out=$(gh api "$url" --jq "$filter" 2>/dev/null); then
+              printf '%s' "$out" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+            fi
+          }
+          trim() { printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+          is_sha() { printf '%s' "$1" | grep -Eq '^[0-9a-f]{40}$'; }
+          is_ref() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*$'; }
+          version_gt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]; }
+          set_out() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+          normalize_version() { # 3.15.0 / v3.15.0 -> v3.15.0；其它格式返回空
+            local raw="${1#v}"
+            if printf '%s' "$raw" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then printf 'v%s' "$raw"; fi
+          }
+
+          echo "Querying upstream ${UPSTREAM_REPO} ..."
+
+          # 1. 官方最新 Release Tag；没有 Release 就退回 tags 列表
+          UPSTREAM_TAG="$(gh_get "repos/${UPSTREAM_REPO}/releases/latest" '.tag_name // empty')"
+          if [ -z "$UPSTREAM_TAG" ]; then
+            UPSTREAM_TAG="$(gh_get "repos/${UPSTREAM_REPO}/tags?per_page=100" \
+              '[.[].name] | map(select(test("^[vV]?[0-9]+\\.[0-9]+\\.[0-9]+$"))) | .[0] // empty')"
+          fi
+          UPSTREAM_TAG="$(normalize_version "$UPSTREAM_TAG")"
+
+          # 2. 官方主分支最新 commit —— 官方没有 tag 时用它做滚动同步
+          UPSTREAM_MAIN_SHA="$(gh_get "repos/${UPSTREAM_REPO}/commits/${UPSTREAM_BRANCH}" '.sha // empty')"
+
+          # 3. 下游最新 Release Tag
+          DOWNSTREAM_TAG="$(gh_get "repos/${MY_REPO}/releases/latest" '.tag_name // empty')"
+
+          # 4. 上一次成功同步的基线（由本流水线在成功后写回 main）
+          LAST_REF=""
+          LAST_SHA=""
+          if [ -f "$STATE_FILE" ]; then
+            LAST_REF="$(trim "$(jq -r '.last_synced_upstream_ref // ""' "$STATE_FILE")")"
+            LAST_SHA="$(trim "$(jq -r '.last_synced_upstream_sha // ""' "$STATE_FILE")")"
+          fi
+
+          # 5. 下游已发布的最高版本，以及滚动同步时使用的下一个版本号
+          HIGHEST_TAG="$(trim "$(git tag -l 'v[0-9]*' | sort -V | tail -n 1)")"
+          if printf '%s' "$HIGHEST_TAG" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+$'; then
+            NEXT_VERSION="v$(printf '%s' "${HIGHEST_TAG#v}" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')"
+          else
+            NEXT_VERSION="v0.0.1"
+          fi
+
+          echo "Official latest tag:  [${UPSTREAM_TAG:-<none>}]"
+          echo "Official main sha:    [${UPSTREAM_MAIN_SHA:-<unknown>}]"
+          echo "Downstream release:   [${DOWNSTREAM_TAG:-<none>}]"
+          echo "Downstream top tag:   [${HIGHEST_TAG:-<none>}] -> next ${NEXT_VERSION}"
+          echo "Last synced baseline: [${LAST_REF:-<none>}] @ [${LAST_SHA:-<none>}]"
+
+          SPECIFIC_TAG="$(trim "${SPECIFIC_TAG}")"
+          FORCE_SYNC="$(trim "${FORCE_SYNC}")"
+
+          HAS_UPDATE="false"
+          SYNC_REASON="none"
+          TARGET_REF=""
+          TARGET_COMMIT=""
+          TARGET_VERSION=""
+
+          if [ -n "$SPECIFIC_TAG" ]; then
+            # 手动指定上游 tag：先确认官方确实有这个 tag，避免生成无效 target
+            if [ -z "$(gh_get "repos/${UPSTREAM_REPO}/git/ref/tags/${SPECIFIC_TAG}" '.ref // empty')" ]; then
+              echo "::error::Upstream tag '${SPECIFIC_TAG}' does not exist in ${UPSTREAM_REPO}."
+              exit 1
+            fi
+            HAS_UPDATE="true"
+            SYNC_REASON="manual-tag"
+            TARGET_REF="$SPECIFIC_TAG"
+            TARGET_VERSION="$SPECIFIC_TAG"
+          elif [ "$FORCE_SYNC" = "true" ]; then
+            HAS_UPDATE="true"
+            SYNC_REASON="forced"
+            if [ -n "$UPSTREAM_TAG" ]; then
+              TARGET_REF="$UPSTREAM_TAG"
+              TARGET_VERSION="$UPSTREAM_TAG"
+            else
+              TARGET_REF="$UPSTREAM_BRANCH"
+              TARGET_VERSION="$NEXT_VERSION"
+            fi
+          elif [ -n "$UPSTREAM_TAG" ] && [ "$UPSTREAM_TAG" != "$LAST_REF" ] \
+            && [ "$UPSTREAM_TAG" != "$HIGHEST_TAG" ] && version_gt "$UPSTREAM_TAG" "$HIGHEST_TAG"; then
+            echo "🚀 New official release detected: ${UPSTREAM_TAG} (downstream top: ${HIGHEST_TAG:-<none>})"
+            HAS_UPDATE="true"
+            SYNC_REASON="upstream-tag"
+            TARGET_REF="$UPSTREAM_TAG"
+            TARGET_VERSION="$UPSTREAM_TAG"
+          elif is_sha "$UPSTREAM_MAIN_SHA" && [ "$UPSTREAM_MAIN_SHA" != "$LAST_SHA" ]; then
+            echo "🚀 New upstream commits detected: ${UPSTREAM_MAIN_SHA:0:8}"
+            HAS_UPDATE="true"
+            SYNC_REASON="upstream-commit"
+            TARGET_REF="$UPSTREAM_BRANCH"
+            TARGET_VERSION="$NEXT_VERSION"
+          else
+            if ! is_sha "$UPSTREAM_MAIN_SHA" && [ -z "$UPSTREAM_TAG" ]; then
+              echo "::warning::Unable to resolve upstream ${UPSTREAM_REPO}@${UPSTREAM_BRANCH}; skipping this cycle."
+            else
+              echo "✓ Downstream is already up to date with the official release cadence."
+            fi
+          fi
+
+          if [ "$HAS_UPDATE" = "true" ]; then
+            TARGET_VERSION="$(normalize_version "$TARGET_VERSION")"
+
+            # 精确锁定要检出的上游 commit，交给同步阶段使用
+            if [ "$TARGET_REF" = "$UPSTREAM_BRANCH" ]; then
+              TARGET_COMMIT="$UPSTREAM_MAIN_SHA"
+            else
+              RESOLVED="$(gh_get "repos/${UPSTREAM_REPO}/commits/${TARGET_REF}" '.sha // empty')"
+              if is_sha "$RESOLVED"; then TARGET_COMMIT="$RESOLVED"; fi
+            fi
+            if ! is_sha "$TARGET_COMMIT"; then TARGET_COMMIT=""; fi
+
+            if [ -z "$TARGET_VERSION" ] || ! is_ref "$TARGET_REF"; then
+              echo "::error::Resolved sync target is invalid (ref='${TARGET_REF}' version='${TARGET_VERSION}')"
+              exit 1
+            fi
+
+            echo "→ Sync target: ref=${TARGET_REF} commit=${TARGET_COMMIT:-<resolve from ref>} version=${TARGET_VERSION} reason=${SYNC_REASON}"
+          fi
+
+          set_out has_update "$HAS_UPDATE"
+          set_out sync_reason "$SYNC_REASON"
+          set_out target_ref "$TARGET_REF"
+          set_out target_commit "$TARGET_COMMIT"
+          set_out target_version "$TARGET_VERSION"
+          set_out upstream_tag "$UPSTREAM_TAG"
+          set_out upstream_main_sha "$UPSTREAM_MAIN_SHA"
+
+  sync-and-patch:
+    name: Apply Patches, Verify & Tag Release
+    needs: check-upstream
+    if: needs.check-upstream.outputs.has_update == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      UPSTREAM_REPO: zai-org/ZCode
+      UPSTREAM_BRANCH: main
+      # 只通过 env 传递上游推导出来的值：绝不在 run 脚本里直接插值 ${{ ... }}，
+      # 否则一旦上游返回值里带引号/换行就会截断脚本（历史故障 exit 127）。
+      TARGET_REF: ${{ needs.check-upstream.outputs.target_ref }}
+      TARGET_COMMIT: ${{ needs.check-upstream.outputs.target_commit }}
+      TARGET_VERSION: ${{ needs.check-upstream.outputs.target_version }}
+      SYNC_REASON: ${{ needs.check-upstream.outputs.sync_reason }}
+      STATE_FILE: .github/upstream-sync-state.json
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate Sync Target
+        run: |
+          set -euo pipefail
+          printf '%s' "$TARGET_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::Unexpected target version '[$TARGET_VERSION]'"; exit 1; }
+          printf '%s' "$TARGET_REF" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*$' \
+            || { echo "::error::Unexpected target ref '[$TARGET_REF]'"; exit 1; }
+          if [ -n "$TARGET_COMMIT" ]; then
+            printf '%s' "$TARGET_COMMIT" | grep -Eq '^[0-9a-f]{40}$' \
+              || { echo "::error::Unexpected target commit '[$TARGET_COMMIT]'"; exit 1; }
+          fi
+          echo "Target: ref=${TARGET_REF} commit=${TARGET_COMMIT:-<resolve from ref>} version=${TARGET_VERSION} reason=${SYNC_REASON}"
+
+      - name: Configure Git Author Identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add Official Upstream Remote & Fetch
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null \
+            || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+          # 官方 tag 抓进独立命名空间，避免覆盖本仓库自己的下游 tag
+          git fetch --no-tags upstream \
+            "+refs/heads/*:refs/remotes/upstream/*" \
+            "+refs/tags/*:refs/upstream-tags/*"
+          git fetch origin
+
+      - name: Update upstream-mirror Branch
+        continue-on-error: true
+        run: |
+          git branch -f upstream-mirror "refs/remotes/upstream/${UPSTREAM_BRANCH}"
+          git push origin upstream-mirror --force
+
+      - name: Prepare Clean Sync Workspace
+        id: prep
+        run: |
+          set -euo pipefail
+
+          BASE=""
+          if [ -n "$TARGET_COMMIT" ] && git rev-parse -q --verify "${TARGET_COMMIT}^{commit}" >/dev/null; then
+            BASE="$TARGET_COMMIT"
+          elif git rev-parse -q --verify "refs/upstream-tags/${TARGET_REF}^{commit}" >/dev/null; then
+            BASE="refs/upstream-tags/${TARGET_REF}"
+          elif git rev-parse -q --verify "refs/remotes/upstream/${TARGET_REF}^{commit}" >/dev/null; then
+            BASE="refs/remotes/upstream/${TARGET_REF}"
+          fi
+          if [ -z "$BASE" ]; then
+            echo "::error::Unable to resolve upstream ref '${TARGET_REF}' (${TARGET_COMMIT:-no commit}) after fetch."
+            exit 1
+          fi
+
+          BASE_COMMIT="$(git rev-parse "${BASE}^{commit}")"
+          echo "Syncing upstream ${BASE_COMMIT} (${TARGET_REF}) as ${TARGET_VERSION}"
+          echo "base_commit=${BASE_COMMIT}" >> "$GITHUB_OUTPUT"
+
+          # 以官方源码树为底，检出临时同步分支
+          git checkout -B sync-work "${BASE_COMMIT}"
+
+          # 叠加下游 meta 资产：工作流 / 补丁 / 发布期脚本 / 品牌图标
+          git rm -r -q --ignore-unmatch .github/workflows
+          git checkout origin/main -- downstream-patches
+          git checkout origin/main -- scripts/merge-macos-update-manifest.mjs
+          git checkout origin/main -- .github/workflows
+          mkdir -p packages/ui/src/assets/provider-icons
+          cp -f downstream-patches/assets/* packages/ui/src/assets/provider-icons/
+
+          git add -A
+          git add -f packages/ui/src/assets/provider-icons
+          for asset in downstream-patches/assets/*; do
+            git ls-files --error-unmatch "packages/ui/src/assets/provider-icons/$(basename "$asset")" >/dev/null \
+              || { echo "::error::Brand asset $(basename "$asset") was not staged."; exit 1; }
+          done
+          git diff --cached --quiet || git commit -m "chore(sync): overlay downstream meta assets onto ${TARGET_REF}"
+          git status --short
+
+      - name: Apply Downstream Patches (3-Way Merge)
+        id: apply_patches
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          PATCHES=(downstream-patches/*.patch)
+          shopt -u nullglob
+
+          if [ "${#PATCHES[@]}" -eq 0 ]; then
+            echo "No downstream patches found."
+            exit 0
+          fi
+
+          for patch in "${PATCHES[@]}"; do
+            echo "--> Applying ${patch}..."
+            if ! git am --3way --keep-cr "${patch}"; then
+              echo "::error::Patch application failed on ${patch}"
+              git am --abort 2>/dev/null || true
+              exit 1
+            fi
+          done
+          echo "All downstream patches applied successfully."
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Typecheck Verification Gate
+        run: pnpm typecheck
+
+      - name: Lint Verification Gate
+        run: pnpm lint
+
+      - name: Push Release Tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if git ls-remote --tags origin "refs/tags/${TARGET_VERSION}" | grep -q .; then
+            echo "Tag ${TARGET_VERSION} already exists on origin."
+            echo "tag_pushed=false" >> "$GITHUB_OUTPUT"
+          else
+            git tag -a "${TARGET_VERSION}" \
+              -m "Upstream ${UPSTREAM_REPO} ${TARGET_REF} (${TARGET_COMMIT:-${SYNC_REASON}}) synced with downstream patches"
+            git push origin "refs/tags/${TARGET_VERSION}"
+            echo "tag_pushed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch Release Pipeline when Tag Already Existed
+        if: steps.tag.outputs.tag_pushed != 'true'
+        run: |
+          gh workflow run release.yml --ref main \
+            -f tag_name="${TARGET_VERSION}" \
+            -f release_name="ZCode ${TARGET_VERSION} (AI Proxy Edition)" \
+            || echo "::warning::Could not dispatch release.yml for ${TARGET_VERSION}; trigger it manually if a rebuild is required."
+
+      - name: Record Sync State on Main
+        env:
+          BASE_COMMIT: ${{ steps.prep.outputs.base_commit }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$BASE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::warning::Upstream base commit unknown; skipping state update."
+            exit 0
+          fi
+
+          # 状态提交必须落在 origin/main 上：绝不能把官方源码树强推到 main
+          git fetch origin main
+          git checkout -B main origin/main
+          mkdir -p "$(dirname "$STATE_FILE")"
+          jq -n \
+            --arg ref "$TARGET_REF" \
+            --arg sha "$BASE_COMMIT" \
+            --arg version "$TARGET_VERSION" \
+            --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{last_synced_upstream_ref: $ref, last_synced_upstream_sha: $sha, last_synced_version: $version, last_synced_at: $at}' \
+            > "$STATE_FILE"
+
+          git add "$STATE_FILE"
+          if git diff --cached --quiet; then
+            echo "Sync state already up to date."
+            exit 0
+          fi
+          git commit -m "chore(sync): track upstream ${TARGET_REF}@${BASE_COMMIT:0:8} as ${TARGET_VERSION}"
+
+          for attempt in 1 2 3; do
+            if git push origin main; then
+              echo "Sync state recorded on main."
+              exit 0
+            fi
+            echo "main push rejected (attempt ${attempt}); rebasing onto origin/main..."
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort || true; exit 1; }
+          done
+          echo "::error::Failed to push sync state to main."
+          exit 1
+
+      - name: Report Sync Failure
+        if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          TITLE="🚨 Upstream Sync Failed (${TARGET_VERSION})"
+          BODY="$(printf '上游 %s 的自动同步或自动化门禁失败，请本地复现并修复。\n\n- target ref: %s\n- target commit: %s\n- target version: %s\n- reason: %s\n- run: %s\n\n本地复现：./scripts/setup-dev.sh\n' \
+            "$UPSTREAM_REPO" "$TARGET_REF" "${TARGET_COMMIT:-<auto>}" "$TARGET_VERSION" "$SYNC_REASON" "$RUN_URL")"
+          EXISTING="$(gh issue list --state open --search "in:title ${TARGET_VERSION}" --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY" || true
+          else
+            gh issue create --title "$TITLE" --body "$BODY" || true
+          fi
