@@ -1,0 +1,3235 @@
+From 5688f47f3561100e96d141aea4d38f3f263284c3 Mon Sep 17 00:00:00 2001
+From: Veildawn <dev@veildawn.cn>
+Date: Mon, 21 Sep 2026 15:23:50 +0800
+Subject: [PATCH 4/4] feat(gateway): ZCode Gateway identity, GitHub-Releases auto
+ update, OAuth-first login, gateway-driven model sync
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+一、下游品牌身份：流水线产出的桌面端不再叫 ZCode Preview，而是自有品牌 `ZCode Gateway`
+- 品牌与 flavor 分轴：`ZCODE_PRODUCT_BRAND=1` 只替换产品名 / appId / Linux 包名 / 归属信息
+- 改名只改一处（DOWNSTREAM_BRAND）；应用名、userData 目录、安装包与产物文件名同一来源
+- 关于窗口标题跟随产品身份；补充 desktop-product-identity.d.mts 类型声明
+
+二、自动更新改走本仓库 GitHub Releases，并默认自动完成全流程
+- 品牌构建用 electron-updater 的 github provider（veildawn/ZCode）替换上游服务端 manifest
+- 更新入口（帮助菜单 / 托盘 / 命令面板）与更新器初始化改为品牌可用；启动检查 + 每小时轮询
+- 品牌构建默认开启「自动下载并安装更新」：后台下载，macOS/Linux 退出时安装，Windows 走重启提示
+- 流水线侧配套（元仓库）：发布 latest*.yml 与 .blockmap，并合并两个 macOS 架构的 manifest
+
+三、AI Proxy 登录：OAuth 为默认选项卡，且不再预填任何网关地址
+- 欢迎页网关入口默认落在 OAuth 授权；API Key 需要用户自己填 BaseURL（缺填给明确报错）
+- 删除模板与登录表单里的 aps.veildawn.com 默认值，placeholder 改为通用示例
+- 设置页网关卡片在 BaseURL 为空时禁用 OAuth 授权入口；宿主无响应 15s 内明确失败
+
+四、网关模型目录与参数自动同步
+- 登录后 / 启动时 / 每 30 分钟 / 设置页「刷新模型列表」：按 /v1/models 重写模型集合与参数
+- 上下文窗口、输入模态、推理档位、输出上限（网关未发布时以窗口为上界）全部来自网关
+- 网关目录是模型列表唯一来源；用户手动关掉的模型保持关闭；网关不可达时保留上一次列表
+---
+ config/provider/zcode-builtin.json            |  45 +-
+ packages/desktop/electron-builder.config.js   |   8 +-
+ .../scripts/desktop-product-identity.d.mts    |  45 ++
+ .../scripts/desktop-product-identity.mjs      |  68 ++-
+ packages/desktop/src/main/about.ts            |   5 +-
+ packages/desktop/src/main/autoUpdater.ts      |  28 +-
+ .../src/main/desktopApplicationMenu.ts        |   5 +-
+ .../src/main/desktopCommandHandlers.ts        |   3 +-
+ .../desktop/src/main/desktopRuntimeEnv.ts     |  15 +-
+ packages/desktop/src/main/desktopTray.ts      |   3 +-
+ packages/desktop/src/main/index.ts            |  11 +-
+ .../src/scheduler/schedulerProtocol.d.ts      |  58 +++
+ .../src/scheduler/schedulerProtocol.d.ts.map  |   1 +
+ .../src/scheduler/schedulerProtocol.js        |   2 +
+ .../src/scheduler/schedulerProtocol.js.map    |   1 +
+ packages/desktop/tsup.config.ts               |  11 +-
+ packages/desktop/vite.config.ts               |   6 +-
+ packages/provider/src/config-service.ts       |  80 ++++
+ packages/provider/src/facades.ts              |  26 +-
+ packages/services/src/index.ts                |   9 +
+ .../src/model-provider/aiProxyModelCatalog.ts | 145 +++++++
+ .../model-provider/providerFacadeServices.ts  |  67 +++
+ .../src/model-provider/providerRuntime.ts     |  94 +++-
+ packages/services/src/node.ts                 |  16 +
+ packages/services/src/oauth/aiProxyOAuth.ts   | 407 ++++++++++++++++++
+ packages/services/src/oauth/oauth.ts          |  18 +
+ packages/services/src/oauth/oauthService.ts   |  32 ++
+ packages/shared/src/env.ts                    |   9 +
+ packages/shared/src/index.ts                  |   1 +
+ packages/shared/src/validationAppSettings.ts  |   5 +-
+ packages/ui/src/WelcomeScreen.tsx             |  34 +-
+ packages/ui/src/i18n/locales/en-US.ts         |  34 ++
+ packages/ui/src/i18n/locales/zh-CN.ts         |  30 ++
+ packages/ui/src/login/LoginAiProxyForm.tsx    |  81 ++++
+ .../ui/src/login/LoginAiProxyOAuthPanel.tsx   | 164 +++++++
+ packages/ui/src/login/LoginApiKeyForm.tsx     | 166 ++++---
+ packages/ui/src/login/useAiProxyOAuthFlow.ts  | 200 +++++++++
+ .../InlineEditableProviderCard.tsx            | 157 +++++++
+ .../ProviderAiProxyOAuthSection.tsx           |  93 ++++
+ .../ProviderCardSections.tsx                  |  59 ++-
+ 40 files changed, 2121 insertions(+), 121 deletions(-)
+ create mode 100644 packages/desktop/scripts/desktop-product-identity.d.mts
+ create mode 100644 packages/desktop/src/scheduler/schedulerProtocol.d.ts
+ create mode 100644 packages/desktop/src/scheduler/schedulerProtocol.d.ts.map
+ create mode 100644 packages/desktop/src/scheduler/schedulerProtocol.js
+ create mode 100644 packages/desktop/src/scheduler/schedulerProtocol.js.map
+ create mode 100644 packages/services/src/model-provider/aiProxyModelCatalog.ts
+ create mode 100644 packages/services/src/oauth/aiProxyOAuth.ts
+ create mode 100644 packages/ui/src/login/LoginAiProxyForm.tsx
+ create mode 100644 packages/ui/src/login/LoginAiProxyOAuthPanel.tsx
+ create mode 100644 packages/ui/src/login/useAiProxyOAuthFlow.ts
+ create mode 100644 packages/ui/src/settings/model-provider-section/ProviderAiProxyOAuthSection.tsx
+
+diff --git a/config/provider/zcode-builtin.json b/config/provider/zcode-builtin.json
+index 8f5c77a..c8c4e85 100644
+--- a/config/provider/zcode-builtin.json
++++ b/config/provider/zcode-builtin.json
+@@ -15,20 +15,9 @@
+               "type": "api-key"
+             },
+             "api": {
+-              "type": "openai-chat-completions",
+-              "baseUrl": "https://aps.veildawn.com/v1"
++              "type": "openai-chat-completions"
+             },
+-            "builtinModelIds": [
+-              "glm-5.2",
+-              "glm-5-turbo",
+-              "claude-opus-4-8",
+-              "claude-sonnet-5",
+-              "gpt-5.6-sol",
+-              "deepseek-v4-pro",
+-              "kimi-for-coding",
+-              "mimo-v2.5",
+-              "gemini-3.8-flash"
+-            ],
++            "builtinModelIds": [],
+             "logo": {
+               "type": "builtin",
+               "key": "ai-proxy"
+@@ -4350,9 +4339,13 @@
+           "modelId": "glm-5.2",
+           "config": {
+             "enabled": true,
+-            "stream": true,
+-            "supportsVision": true,
+-            "supportsJsonSchemaOutput": true
++            "properties": {
++              "inputFormat": {
++                "supportsText": true,
++                "supportsImage": true
++              },
++              "supportsJsonSchemaOutput": true
++            }
+           }
+         },
+         {
+@@ -4360,9 +4353,13 @@
+           "modelId": "claude-opus-4-8",
+           "config": {
+             "enabled": true,
+-            "stream": true,
+-            "supportsVision": true,
+-            "supportsJsonSchemaOutput": true
++            "properties": {
++              "inputFormat": {
++                "supportsText": true,
++                "supportsImage": true
++              },
++              "supportsJsonSchemaOutput": true
++            }
+           }
+         },
+         {
+@@ -4370,9 +4367,13 @@
+           "modelId": "gpt-5.6-sol",
+           "config": {
+             "enabled": true,
+-            "stream": true,
+-            "supportsVision": true,
+-            "supportsJsonSchemaOutput": true
++            "properties": {
++              "inputFormat": {
++                "supportsText": true,
++                "supportsImage": true
++              },
++              "supportsJsonSchemaOutput": true
++            }
+           }
+         },
+         {
+diff --git a/packages/desktop/electron-builder.config.js b/packages/desktop/electron-builder.config.js
+index cb059e0..bdf1644 100644
+--- a/packages/desktop/electron-builder.config.js
++++ b/packages/desktop/electron-builder.config.js
+@@ -456,10 +456,12 @@ export default {
+   extraMetadata: {
+     version: buildMetadata.appVersion,
+     zcodeProductFlavor: desktopProductIdentity.flavor,
+-    homepage: "https://zcode.z.ai",
++    // Linux 打包（fpm）会把 homepage/author 写进包元数据；下游品牌身份给出自己的值，
++    // 没有品牌时保持上游的身份字段。
++    homepage: desktopProductIdentity.homepage ?? "https://zcode.z.ai",
+     author: {
+-      name: "ZCode",
+-      email: "dev@zcode.z.ai",
++      name: desktopProductIdentity.authorName ?? "ZCode",
++      email: desktopProductIdentity.authorEmail ?? "dev@zcode.z.ai",
+     },
+   },
+   // macOS 签名阶段会对 Electron Framework 下每个语言包逐个 codesign。
+diff --git a/packages/desktop/scripts/desktop-product-identity.d.mts b/packages/desktop/scripts/desktop-product-identity.d.mts
+new file mode 100644
+index 0000000..ee3858d
+--- /dev/null
++++ b/packages/desktop/scripts/desktop-product-identity.d.mts
+@@ -0,0 +1,45 @@
++/**
++ * `desktop-product-identity.mjs` 的类型声明。
++ *
++ * 该模块同时被 electron-builder 配置（纯 JS）和 main 进程（TS，编译期注入的
++ * ZCODE_PRODUCT_FLAVOR / ZCODE_PRODUCT_BRAND）使用，因此保持 .mjs 实现 + 这里声明。
++ */
++export type DesktopProductFlavor = "production" | "preview";
++
++export interface DesktopProductIdentity {
++  readonly flavor: DesktopProductFlavor;
++  readonly appId: string;
++  readonly productName: string;
++  readonly linuxExecutableName: string;
++  readonly linuxPackageName: string;
++  readonly cuaHelperInstallVariant: string | null;
++  readonly homepage?: string;
++  readonly authorName?: string;
++  readonly authorEmail?: string;
++}
++
++export const ZCODE_PREVIEW_IDENTITY_ENV: string;
++export const desktopProductIdentities: Readonly<
++  Record<DesktopProductFlavor, DesktopProductIdentity>
++>;
++export function isPreviewIdentityRequested(env?: Record<string, string | undefined>): boolean;
++export function isProductBrandRequested(env?: Record<string, string | undefined>): boolean;
++export function resolveDesktopProductFlavor(env?: Record<string, string | undefined>):
++  DesktopProductFlavor;
++export function resolveDesktopProductIdentityFromBuild(input: {
++  flavor: DesktopProductFlavor;
++  brand?: boolean;
++}): DesktopProductIdentity;
++export function resolveDesktopProductIdentity(
++  env?: Record<string, string | undefined>,
++): DesktopProductIdentity;
++export function resolveDesktopArtifactSuffix(env?: Record<string, string | undefined>): string;
++export function resolveWindowsAppUserModelIdForFlavor(
++  flavor: DesktopProductFlavor,
++  runtime?: { isPackaged?: boolean },
++  brand?: boolean,
++): string;
++export function resolveWindowsAppUserModelId(
++  env?: Record<string, string | undefined>,
++  runtime?: { isPackaged?: boolean },
++): string;
+diff --git a/packages/desktop/scripts/desktop-product-identity.mjs b/packages/desktop/scripts/desktop-product-identity.mjs
+index 3f3f5d9..e58f200 100644
+--- a/packages/desktop/scripts/desktop-product-identity.mjs
++++ b/packages/desktop/scripts/desktop-product-identity.mjs
+@@ -23,6 +23,30 @@ const PREVIEW_IDENTITY = Object.freeze({
+   cuaHelperInstallVariant: "preview",
+ });
+ 
++/**
++ * 下游发行版品牌：叠加在 flavor 之上，替换产品名与包名（本仓库流水线发布的就是它）。
++ *
++ * 与 flavor 分轴的原因：flavor 决定更新器、签名门与菜单语义，品牌只决定"用户看到的是哪个
++ * App"。两者分开后，下游发行版既可以是 preview flavor（官方更新器关闭、与官方 ZCode 并排安装），
++ * 也可以在未来切到 production flavor，而名字始终是 `ZCode Gateway`。
++ *
++ * 换名字只改这一处；`desktopRuntimeEnv.ts` 会用同一份 `productName` 作为运行期应用名与
++ * Electron 数据目录名，`electron-builder.config.js` 用同一份生成安装包与产物文件名。
++ */
++const DOWNSTREAM_BRAND = Object.freeze({
++  appId: "dev.veildawn.zcode-gateway",
++  productName: "ZCode Gateway",
++  linuxExecutableName: "zcode-gateway",
++  linuxPackageName: "zcode-gateway",
++  // 打包元数据（Linux 包、About、发行说明）里的归属：下游发行版由本仓库维护，
++  // 与上游产品的 homepage / 作者区分开。
++  homepage: "https://github.com/veildawn/ZCode",
++  authorName: "Veildawn",
++  authorEmail: "dev@veildawn.cn",
++});
++
++const PRODUCT_BRAND_ENV = "ZCODE_PRODUCT_BRAND";
++
+ export const desktopProductIdentities = Object.freeze({
+   production: PRODUCTION_IDENTITY,
+   preview: PREVIEW_IDENTITY,
+@@ -63,8 +87,36 @@ export function resolveDesktopProductFlavor(env = process.env) {
+   return normalizeDesktopZCodeEnv(env) === "production" ? "production" : "preview";
+ }
+ 
++/**
++ * 下游品牌的开关，语义与 `ZCODE_PREVIEW_IDENTITY` 一致：只有 `1` 是开启，
++ * `0` / 空是关闭，其它拼写直接失败（避免把品牌漏进上游身份包，或反过来）。
++ */
++export function isProductBrandRequested(env = process.env) {
++  const value = env[PRODUCT_BRAND_ENV]?.trim() ?? "";
++  if (value === "1") {
++    return true;
++  }
++  if (value === "" || value === "0") {
++    return false;
++  }
++  throw new Error(`invalid ${PRODUCT_BRAND_ENV}=${env[PRODUCT_BRAND_ENV]}; expected 1 or 0`);
++}
++
++/**
++ * 由「flavor + 是否下游品牌」两个构建期事实解析身份。
++ * 打包产物里 flavor / brand 都来自编译期 define，因此运行期的应用名与数据目录
++ * 必然和安装包一致，不依赖启动环境变量。
++ */
++export function resolveDesktopProductIdentityFromBuild({ flavor, brand = false }) {
++  const base = desktopProductIdentities[flavor === "preview" ? "preview" : "production"];
++  return brand ? Object.freeze({ ...base, ...DOWNSTREAM_BRAND }) : base;
++}
++
+ export function resolveDesktopProductIdentity(env = process.env) {
+-  return desktopProductIdentities[resolveDesktopProductFlavor(env)];
++  return resolveDesktopProductIdentityFromBuild({
++    flavor: resolveDesktopProductFlavor(env),
++    brand: isProductBrandRequested(env),
++  });
+ }
+ 
+ /**
+@@ -82,13 +134,21 @@ export function resolveDesktopArtifactSuffix(env = process.env) {
+  * 和运行中的 Electron 进程会被 Windows 视为三个不同的应用。开发态继续保留旧身份，
+  * 避免本地调试快捷方式和正式/Preview 安装包互相污染。
+  */
+-export function resolveWindowsAppUserModelIdForFlavor(flavor, runtime = { isPackaged: true }) {
++export function resolveWindowsAppUserModelIdForFlavor(
++  flavor,
++  runtime = { isPackaged: true },
++  brand = false,
++) {
+   if (runtime.isPackaged === false) {
+     return "cn.aminer.zcode";
+   }
+-  return desktopProductIdentities[flavor === "preview" ? "preview" : "production"].appId;
++  return resolveDesktopProductIdentityFromBuild({ flavor, brand }).appId;
+ }
+ 
+ export function resolveWindowsAppUserModelId(env = process.env, runtime = { isPackaged: true }) {
+-  return resolveWindowsAppUserModelIdForFlavor(resolveDesktopProductFlavor(env), runtime);
++  return resolveWindowsAppUserModelIdForFlavor(
++    resolveDesktopProductFlavor(env),
++    runtime,
++    isProductBrandRequested(env),
++  );
+ }
+diff --git a/packages/desktop/src/main/about.ts b/packages/desktop/src/main/about.ts
+index 8553c5f..8463c55 100644
+--- a/packages/desktop/src/main/about.ts
++++ b/packages/desktop/src/main/about.ts
+@@ -11,6 +11,7 @@ import {
+   ZCODE_VERSION,
+ } from "@zcode/shared";
+ import { createCustomAboutDialogHtml } from "./aboutWindow.js";
++import { runtimeApplicationName } from "./desktopRuntimeEnv.js";
+ 
+ interface DesktopBuildMetadata {
+   appVersion?: string;
+@@ -68,14 +69,14 @@ const ABOUT_MESSAGES: Record<
+   }
+ > = {
+   "zh-CN": {
+-    aboutTitle: "关于 ZCode",
++    aboutTitle: `关于 ${runtimeApplicationName}`,
+     versionLabel: "版本",
+     okButtonLabel: "确定",
+     optimizedForAppleSilicon: "已针对 Apple Silicon 优化。",
+     copyright: (year) => `版权所有 © ${year} ZCode。`,
+   },
+   "en-US": {
+-    aboutTitle: "About ZCode",
++    aboutTitle: `About ${runtimeApplicationName}`,
+     versionLabel: "version",
+     okButtonLabel: "OK",
+     optimizedForAppleSilicon: "Optimized for Apple Silicon.",
+diff --git a/packages/desktop/src/main/autoUpdater.ts b/packages/desktop/src/main/autoUpdater.ts
+index f7b8078..14249aa 100644
+--- a/packages/desktop/src/main/autoUpdater.ts
++++ b/packages/desktop/src/main/autoUpdater.ts
+@@ -8,6 +8,7 @@ import {
+   getDesktopMenuMessage,
+   PlatformChannels,
+   resolveRuntimeZCodeEndpointOrigin,
++  ZCODE_PRODUCT_BRAND,
+   ZCODE_VERSION,
+   type ElectronReleaseChannel,
+   type Locale,
+@@ -751,6 +752,26 @@ async function syncAutoUpdateCheckChannelFromSettings(
+   activeAutoUpdateCheckChannel = nextChannel;
+ }
+ 
++/**
++ * 下游发行版的更新源：本仓库自己的 GitHub Releases。
++ *
++ * electron-updater 的 github provider 直接读 release 资产里的 `latest*.yml` +
++ * 同目录安装包，因此流水线必须把 manifest 一起作为 release 资产发布（见 release.yml）。
++ */
++const DOWNSTREAM_UPDATE_RELEASE = Object.freeze({ owner: "veildawn", repo: "ZCode" });
++
++function applyDownstreamGithubUpdateProvider(): void {
++  autoUpdater.setFeedURL({
++    provider: "github",
++    owner: DOWNSTREAM_UPDATE_RELEASE.owner,
++    repo: DOWNSTREAM_UPDATE_RELEASE.repo,
++    releaseType: "release",
++  });
++  logger.info(
++    `[auto-update] downstream github provider applied owner=${DOWNSTREAM_UPDATE_RELEASE.owner} repo=${DOWNSTREAM_UPDATE_RELEASE.repo}`,
++  );
++}
++
+ function applyManifestUpdateProvider(options: InitAutoUpdaterOptions): void {
+   const manifestUrl = options.updateFeedSource?.url.trim();
+   autoUpdater.setFeedURL({
+@@ -1504,7 +1525,12 @@ export async function initAutoUpdater(options: InitAutoUpdaterOptions = {}): Pro
+   // 这里仅在 Windows 关闭“退出即自动安装”，要求用户显式点更新；其他平台保持原有行为，避免改动既有升级链路。
+   autoUpdater.autoInstallOnAppQuit = process.platform !== "win32";
+   autoUpdater.logger = logger;
+-  applyManifestUpdateProvider(options);
++  // 品牌身份（ZCode Gateway）走自己的 GitHub Releases；上游身份继续用服务端 manifest。
++  if (ZCODE_PRODUCT_BRAND) {
++    applyDownstreamGithubUpdateProvider();
++  } else {
++    applyManifestUpdateProvider(options);
++  }
+ 
+   const triggerCheckForUpdates = (reason: string) => {
+     if (checkForUpdatesInFlight) {
+diff --git a/packages/desktop/src/main/desktopApplicationMenu.ts b/packages/desktop/src/main/desktopApplicationMenu.ts
+index df3efd5..725d806 100644
+--- a/packages/desktop/src/main/desktopApplicationMenu.ts
++++ b/packages/desktop/src/main/desktopApplicationMenu.ts
+@@ -5,6 +5,7 @@ import {
+   getDesktopMenuMessage,
+   isValidShortcutBinding,
+   ZCODE_ENV,
++  ZCODE_PRODUCT_BRAND,
+   ZCODE_PRODUCT_FLAVOR,
+   type DesktopCommandId,
+   type Locale,
+@@ -118,7 +119,7 @@ function buildApplicationMenuTemplate(options: {
+                 click: () => void options.executeDesktopCommand(DesktopCommandIds.ShowAbout),
+               },
+               // 更新入口跟随产品身份：Preview 禁用更新器，生产后端的 Preview 也不例外。
+-              ...(ZCODE_PRODUCT_FLAVOR === "production"
++              ...(ZCODE_PRODUCT_BRAND || ZCODE_PRODUCT_FLAVOR === "production"
+                 ? [
+                     {
+                       id: CHECK_FOR_UPDATE_MENU_ID,
+@@ -259,7 +260,7 @@ function buildApplicationMenuTemplate(options: {
+                 label: getLabel(desktopMenuMessageIds.helpAbout),
+                 click: () => void options.executeDesktopCommand(DesktopCommandIds.ShowAbout),
+               },
+-              ...(ZCODE_PRODUCT_FLAVOR === "production"
++              ...(ZCODE_PRODUCT_BRAND || ZCODE_PRODUCT_FLAVOR === "production"
+                 ? [
+                     {
+                       id: CHECK_FOR_UPDATE_MENU_ID,
+diff --git a/packages/desktop/src/main/desktopCommandHandlers.ts b/packages/desktop/src/main/desktopCommandHandlers.ts
+index e9c182a..252a45c 100644
+--- a/packages/desktop/src/main/desktopCommandHandlers.ts
++++ b/packages/desktop/src/main/desktopCommandHandlers.ts
+@@ -12,6 +12,7 @@ import {
+   type Locale,
+   resolveRuntimeZCodeEndpointOrigin,
+   ZCODE_ENV,
++  ZCODE_PRODUCT_BRAND,
+   ZCODE_PRODUCT_FLAVOR,
+   buildZCodeEndpointUrls,
+   getCommunityUrlFromConfigs,
+@@ -590,7 +591,7 @@ export async function executeDesktopCommand(options: {
+       return;
+     case DesktopCommandIds.CheckForUpdates:
+       // 按产品身份而不是后端环境放行：生产后端的 Preview 同样没有更新器。
+-      if (ZCODE_PRODUCT_FLAVOR === "production") {
++      if (ZCODE_PRODUCT_BRAND || ZCODE_PRODUCT_FLAVOR === "production") {
+         checkForUpdateMenuClick(targetWindow);
+       } else {
+         options.logger.info("[auto-update] Preview 已禁用手动更新检查");
+diff --git a/packages/desktop/src/main/desktopRuntimeEnv.ts b/packages/desktop/src/main/desktopRuntimeEnv.ts
+index e444d70..05b1bd5 100644
+--- a/packages/desktop/src/main/desktopRuntimeEnv.ts
++++ b/packages/desktop/src/main/desktopRuntimeEnv.ts
+@@ -5,11 +5,13 @@ import { join, resolve, win32 } from "node:path";
+ import type { ConnectOptions } from "@zcode/server/remote";
+ import { listSSHConfigAliasesFromLocalConfig } from "@zcode/services/node";
+ import { DEV_HELPER_APP_NAME, HELPER_APP_NAME } from "@zcode/zcode-cua/broker/helperConstants";
++import { resolveDesktopProductIdentityFromBuild } from "../../scripts/desktop-product-identity.mjs";
+ import {
+   ZCODE_APP_VERSION_ENV,
+   ZCODE_AGENT_RUNTIME,
+   ZCODE_DYNAMIC_WORKFLOW_MODE_ENV,
+   ZCODE_ENV,
++  ZCODE_PRODUCT_BRAND,
+   ZCODE_PRODUCT_FLAVOR,
+   ZCODE_RUNTIME_ENV_KEY,
+   ZCODE_VERSION,
+@@ -42,9 +44,16 @@ const isLocalDevelopmentRuntime = !isElectronAppPackaged();
+ export const desktopRuntimeEnv: ZCodeRuntimeEnv = isLocalDevelopmentRuntime
+   ? "development"
+   : "production";
+-// 身份看编译期 flavor 而不是 ZCODE_ENV：ZCODE_PREVIEW_IDENTITY=1 的生产后端构建同样是 Preview，
+-// 需要独立的应用名、Electron 数据目录和 Helper 安装子目录才能与正式版并排运行。
++// 打包态身份来自编译期 flavor 与品牌开关（而不是运行时环境变量）：应用名必须与安装包
++// productName 完全一致，否则 userData 目录会漂移。两者都只有 desktop-product-identity.mjs
++// 一个来源，改名不会漏掉数据目录。
++// flavor 仍然决定打包态行为（Helper 安装子目录、动态工作流灰度等），与产品名分开计算：
++// 改名只动 productName，不改变 flavor 语义。
+ const isPreviewPackagedRuntime = !isLocalDevelopmentRuntime && ZCODE_PRODUCT_FLAVOR === "preview";
++const packagedProductName = resolveDesktopProductIdentityFromBuild({
++  flavor: ZCODE_PRODUCT_FLAVOR,
++  brand: ZCODE_PRODUCT_BRAND,
++}).productName;
+ 
+ function readRuntimeEnvOverride(name: string): string | undefined {
+   return process.env[name]?.trim() || undefined;
+@@ -60,7 +69,7 @@ function isTruthyRuntimeEnvOverride(name: string): boolean {
+ // 这里允许测试显式隔离运行时身份，正常桌面/远控路径保持原来的默认值。
+ export const runtimeApplicationName =
+   readRuntimeEnvOverride("ZCODE_DESKTOP_APPLICATION_NAME") ??
+-  (isLocalDevelopmentRuntime ? "ZCode Dev" : isPreviewPackagedRuntime ? "ZCode Preview" : "ZCode");
++  (isLocalDevelopmentRuntime ? "ZCode Dev" : packagedProductName);
+ // Electron 的 app.getPath("home") 不一定跟随测试进程里的 HOME 覆盖。
+ // e2e 默认工作区依赖 home 路径，因此提供显式覆盖，避免测试写到开发者真实 ~/ZCodeProject。
+ export const runtimeHomePath = readRuntimeEnvOverride("ZCODE_DESKTOP_HOME_DIR");
+diff --git a/packages/desktop/src/main/desktopTray.ts b/packages/desktop/src/main/desktopTray.ts
+index 8f5bbbe..3c6adf5 100644
+--- a/packages/desktop/src/main/desktopTray.ts
++++ b/packages/desktop/src/main/desktopTray.ts
+@@ -4,6 +4,7 @@ import {
+   DesktopCommandIds,
+   desktopMenuMessageIds,
+   getDesktopMenuMessage,
++  ZCODE_PRODUCT_BRAND,
+   ZCODE_PRODUCT_FLAVOR,
+   type DesktopCommandId,
+   type Locale,
+@@ -73,7 +74,7 @@ export function createWindowsDesktopTray(options: {
+         },
+         { type: "separator" },
+         // 更新入口跟随产品身份：Preview（含生产后端的 Preview）禁用更新器，托盘也不能露出入口。
+-        ...(ZCODE_PRODUCT_FLAVOR === "production"
++        ...(ZCODE_PRODUCT_BRAND || ZCODE_PRODUCT_FLAVOR === "production"
+           ? [
+               {
+                 label: getLabel(desktopMenuMessageIds.helpCheckForUpdates),
+diff --git a/packages/desktop/src/main/index.ts b/packages/desktop/src/main/index.ts
+index e3de208..813cc01 100644
+--- a/packages/desktop/src/main/index.ts
++++ b/packages/desktop/src/main/index.ts
+@@ -68,6 +68,7 @@ import {
+   type AppSettings,
+   PlatformChannels,
+   ZCODE_ENV,
++  ZCODE_PRODUCT_BRAND,
+   ZCODE_PRODUCT_FLAVOR,
+   DEFAULT_ZCODE_ENDPOINT_ORIGIN,
+   DEFAULT_LOCALE,
+@@ -1908,7 +1909,11 @@ app.whenReady().then(async () => {
+     // 打包态必须与 NSIS 快捷方式使用同一 AUMID，否则 Shell 把它们当成不同应用。
+     // 使用构建期产品身份，不依赖用户机器环境；开发态继续保持独立身份。
+     app.setAppUserModelId(
+-      resolveWindowsAppUserModelIdForFlavor(ZCODE_PRODUCT_FLAVOR, { isPackaged: app.isPackaged }),
++      resolveWindowsAppUserModelIdForFlavor(
++        ZCODE_PRODUCT_FLAVOR,
++        { isPackaged: app.isPackaged },
++        ZCODE_PRODUCT_BRAND,
++      ),
+     );
+   }
+ 
+@@ -1943,7 +1948,9 @@ app.whenReady().then(async () => {
+   // Preview 身份无论连接哪个后端都不自动更新：stable feed 上只分发正式 ZCode 安装包，
+   // 不向 Preview 渠道提供更新。
+   void initAutoUpdater({
+-    enabled: ZCODE_PRODUCT_FLAVOR === "production",
++    // 品牌身份（ZCode Gateway）自带更新源（本仓库 GitHub Releases），因此不受上游
++    // "只有 production 身份才有更新器" 的限制；未品牌的构建继续按 flavor 判断。
++    enabled: ZCODE_PRODUCT_BRAND || ZCODE_PRODUCT_FLAVOR === "production",
+     onBeforeQuitAndInstall: async () => {
+       notifyStabilityLifecycle("update_install");
+       await prepareAppQuit("auto-update quitAndInstall", "update-install");
+diff --git a/packages/desktop/src/scheduler/schedulerProtocol.d.ts b/packages/desktop/src/scheduler/schedulerProtocol.d.ts
+new file mode 100644
+index 0000000..fabd094
+--- /dev/null
++++ b/packages/desktop/src/scheduler/schedulerProtocol.d.ts
+@@ -0,0 +1,58 @@
++import type { ModelSelection, NodeSelfResourceSample } from "@zcode/shared";
++/** scheduler → main */
++export type SchedulerToMainMessage = {
++    type: "cron-dispatch-request";
++    automationId: string;
++    runId: string;
++    prompt: string;
++    targetTaskId?: string;
++    modelSelection?: ModelSelection;
++    mode?: string;
++    workspacePath: string;
++    workspaceIdentity?: string;
++} | {
++    type: "offpeak-dispatch-request";
++    offPeakTaskId: string;
++    prompt: string;
++    permissionMode: string;
++    modelSelection: ModelSelection;
++    conversationId?: string;
++    sessionId?: string;
++    serverTicketId?: string;
++    workspacePath: string;
++    workspaceIdentity?: string;
++} | {
++    type: "scheduler-log";
++    level: "info" | "warn" | "error";
++    message: string;
++} | {
++    type: "offpeak-active-count";
++    count: number;
++} | {
++    type: "scheduler-resource-sample";
++    sample: NodeSelfResourceSample;
++};
++/** main → scheduler */
++export type MainToSchedulerMessage = {
++    type: "cron-dispatch-result";
++    runId: string;
++    ok: boolean;
++    taskId?: string;
++    sessionId?: string;
++    error?: string;
++    failureKind?: "transient" | "permanent";
++} | {
++    type: "offpeak-dispatch-result";
++    offPeakTaskId: string;
++    ok: boolean;
++    conversationId?: string;
++    sessionId?: string;
++    error?: string;
++    failureKind?: "transient" | "permanent";
++} | {
++    type: "scheduler-dispose";
++} | {
++    type: "scheduler-wake";
++    automationId: string;
++};
++//# sourceMappingURL=schedulerProtocol.d.ts.map
+\ No newline at end of file
+diff --git a/packages/desktop/src/scheduler/schedulerProtocol.d.ts.map b/packages/desktop/src/scheduler/schedulerProtocol.d.ts.map
+new file mode 100644
+index 0000000..829e8bf
+--- /dev/null
++++ b/packages/desktop/src/scheduler/schedulerProtocol.d.ts.map
+@@ -0,0 +1 @@
++{"version":3,"file":"schedulerProtocol.d.ts","sourceRoot":"","sources":["schedulerProtocol.ts"],"names":[],"mappings":"AAGA,OAAO,KAAK,EAAE,cAAc,EAAE,sBAAsB,EAAE,MAAM,eAAe,CAAC;AAE5E,uBAAuB;AACvB,MAAM,MAAM,sBAAsB,GAC9B;IACE,IAAI,EAAE,uBAAuB,CAAC;IAC9B,YAAY,EAAE,MAAM,CAAC;IACrB,KAAK,EAAE,MAAM,CAAC;IACd,MAAM,EAAE,MAAM,CAAC;IACf,YAAY,CAAC,EAAE,MAAM,CAAC;IACtB,cAAc,CAAC,EAAE,cAAc,CAAC;IAChC,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,aAAa,EAAE,MAAM,CAAC;IACtB,iBAAiB,CAAC,EAAE,MAAM,CAAC;CAC5B,GACD;IAGE,IAAI,EAAE,0BAA0B,CAAC;IACjC,aAAa,EAAE,MAAM,CAAC;IACtB,MAAM,EAAE,MAAM,CAAC;IACf,cAAc,EAAE,MAAM,CAAC;IACvB,cAAc,EAAE,cAAc,CAAC;IAC/B,cAAc,CAAC,EAAE,MAAM,CAAC;IACxB,SAAS,CAAC,EAAE,MAAM,CAAC;IACnB,cAAc,CAAC,EAAE,MAAM,CAAC;IACxB,aAAa,EAAE,MAAM,CAAC;IACtB,iBAAiB,CAAC,EAAE,MAAM,CAAC;CAC5B,GACD;IACE,IAAI,EAAE,eAAe,CAAC;IACtB,KAAK,EAAE,MAAM,GAAG,MAAM,GAAG,OAAO,CAAC;IACjC,OAAO,EAAE,MAAM,CAAC;CACjB,GACD;IAGE,IAAI,EAAE,sBAAsB,CAAC;IAC7B,KAAK,EAAE,MAAM,CAAC;CACf,GACD;IAGE,IAAI,EAAE,2BAA2B,CAAC;IAClC,MAAM,EAAE,sBAAsB,CAAC;CAChC,CAAC;AAEN,uBAAuB;AACvB,MAAM,MAAM,sBAAsB,GAC9B;IACE,IAAI,EAAE,sBAAsB,CAAC;IAC7B,KAAK,EAAE,MAAM,CAAC;IACd,EAAE,EAAE,OAAO,CAAC;IACZ,MAAM,CAAC,EAAE,MAAM,CAAC;IAChB,SAAS,CAAC,EAAE,MAAM,CAAC;IACnB,KAAK,CAAC,EAAE,MAAM,CAAC;IACf,WAAW,CAAC,EAAE,WAAW,GAAG,WAAW,CAAC;CACzC,GACD;IAEE,IAAI,EAAE,yBAAyB,CAAC;IAChC,aAAa,EAAE,MAAM,CAAC;IACtB,EAAE,EAAE,OAAO,CAAC;IACZ,cAAc,CAAC,EAAE,MAAM,CAAC;IACxB,SAAS,CAAC,EAAE,MAAM,CAAC;IACnB,KAAK,CAAC,EAAE,MAAM,CAAC;IACf,WAAW,CAAC,EAAE,WAAW,GAAG,WAAW,CAAC;CACzC,GACD;IAEE,IAAI,EAAE,mBAAmB,CAAC;CAC3B,GACD;IAEE,IAAI,EAAE,gBAAgB,CAAC;IACvB,YAAY,EAAE,MAAM,CAAC;CACtB,CAAC"}
+\ No newline at end of file
+diff --git a/packages/desktop/src/scheduler/schedulerProtocol.js b/packages/desktop/src/scheduler/schedulerProtocol.js
+new file mode 100644
+index 0000000..ab0db39
+--- /dev/null
++++ b/packages/desktop/src/scheduler/schedulerProtocol.js
+@@ -0,0 +1,2 @@
++export {};
++//# sourceMappingURL=schedulerProtocol.js.map
+\ No newline at end of file
+diff --git a/packages/desktop/src/scheduler/schedulerProtocol.js.map b/packages/desktop/src/scheduler/schedulerProtocol.js.map
+new file mode 100644
+index 0000000..934992d
+--- /dev/null
++++ b/packages/desktop/src/scheduler/schedulerProtocol.js.map
+@@ -0,0 +1 @@
++{"version":3,"file":"schedulerProtocol.js","sourceRoot":"","sources":["schedulerProtocol.ts"],"names":[],"mappings":""}
+\ No newline at end of file
+diff --git a/packages/desktop/tsup.config.ts b/packages/desktop/tsup.config.ts
+index f3aa182..6d8e7c0 100644
+--- a/packages/desktop/tsup.config.ts
++++ b/packages/desktop/tsup.config.ts
+@@ -4,7 +4,10 @@ import { resolve } from "node:path";
+ import { pathToFileURL } from "node:url";
+ import { defineConfig } from "tsup";
+ import { getBuildMetadata } from "./scripts/build-metadata.mjs";
+-import { resolveDesktopProductFlavor } from "./scripts/desktop-product-identity.mjs";
++import {
++  isProductBrandRequested,
++  resolveDesktopProductFlavor,
++} from "./scripts/desktop-product-identity.mjs";
+ // tsup 会先打包配置文件；动态加载构建工具，避免其 import.meta.dirname 被重定位到 desktop。
+ const { loadBuiltinProviderConfig } = await import(
+   pathToFileURL(resolve(import.meta.dirname, "../../scripts/builtin-provider-config.mjs")).href
+@@ -62,7 +65,10 @@ const env = loadEnvFiles();
+ const { environment: zcodeEnv } = await loadBuiltinProviderConfig();
+ // 安装包身份与后端环境分轴：ZCODE_PREVIEW_IDENTITY=1 让生产后端的构建仍以 ZCode Preview 身份打包运行。
+ const zcodeProductFlavor = resolveDesktopProductFlavor({ ...process.env, ZCODE_ENV: zcodeEnv });
+-console.log(`[tsup] ZCODE_ENV=${zcodeEnv} ZCODE_PRODUCT_FLAVOR=${zcodeProductFlavor}`);
++const zcodeProductBrand = isProductBrandRequested(process.env);
++console.log(
++  `[tsup] ZCODE_ENV=${zcodeEnv} ZCODE_PRODUCT_FLAVOR=${zcodeProductFlavor} ZCODE_PRODUCT_BRAND=${zcodeProductBrand ? 1 : 0}`,
++);
+ 
+ export function resolveDesktopTsupBundleSecurityOptions(
+   runtimeEnv: Record<string, string | undefined> = process.env,
+@@ -102,6 +108,7 @@ function createSharedDefines() {
+     __ZCODE_ENV__: JSON.stringify(zcodeEnv),
+     __ZCODE_ENDPOINT_ENV__: JSON.stringify(pickProductEndpointEnv(env)),
+     __ZCODE_PRODUCT_FLAVOR__: JSON.stringify(zcodeProductFlavor),
++    __ZCODE_PRODUCT_BRAND__: JSON.stringify(zcodeProductBrand ? "1" : "0"),
+     // Computer Use Helper build identity — helperInstaller 读它决定下载哪个 Helper bundle。
+     // 缺失时 installer 抛 "Packaged ZCode is missing its embedded Computer Use Helper build identity"。
+     // CI 构建时通过 ZCODE_CUA_HELPER_BUILD_ID env 注入；dev 为空串走兜底（dev helper 不走下载）。
+diff --git a/packages/desktop/vite.config.ts b/packages/desktop/vite.config.ts
+index f125ef5..a38ff50 100644
+--- a/packages/desktop/vite.config.ts
++++ b/packages/desktop/vite.config.ts
+@@ -7,7 +7,10 @@ import tailwindcss from "@tailwindcss/vite";
+ import { resolveZCodeEndpointOrigin, pickProductEndpointEnv } from "@zcode/shared/zcodeEndpoint";
+ import { pdfJsCMapsPlugin } from "../ui/vite/pdfJsCMapsPlugin.js";
+ import { getBuildMetadata } from "./scripts/build-metadata.mjs";
+-import { resolveDesktopProductFlavor } from "./scripts/desktop-product-identity.mjs";
++import {
++  isProductBrandRequested,
++  resolveDesktopProductFlavor,
++} from "./scripts/desktop-product-identity.mjs";
+ 
+ const buildMetadata = getBuildMetadata();
+ const desktopRequire = createRequire(import.meta.url);
+@@ -194,6 +197,7 @@ export default defineConfig(({ mode }) => {
+       __ZCODE_BUILD_TIME__: JSON.stringify(buildMetadata.buildTime),
+       __ZCODE_ENV__: JSON.stringify(zcodeEnv),
+       __ZCODE_PRODUCT_FLAVOR__: JSON.stringify(zcodeProductFlavor),
++      __ZCODE_PRODUCT_BRAND__: JSON.stringify(isProductBrandRequested(process.env) ? "1" : "0"),
+       __ZCODE_LOCAL_DEVELOPMENT_RUNTIME__: JSON.stringify(mode !== "production"),
+       "import.meta.env.VITE_ZCODE_BASE_URL": JSON.stringify(zcodeEndpointOrigin),
+       // 兼容旧 renderer 读取名；新代码统一读 VITE_ZCODE_BASE_URL。
+diff --git a/packages/provider/src/config-service.ts b/packages/provider/src/config-service.ts
+index 5ae36c6..993c39f 100644
+--- a/packages/provider/src/config-service.ts
++++ b/packages/provider/src/config-service.ts
+@@ -52,6 +52,14 @@ export interface PersonalProviderCreation {
+   readonly providerId: ProviderId;
+ }
+ 
++/**
++ * 一次整体替换里的单个模型：id 与它的完整配置一起给，顺序即列表顺序。
++ */
++export interface PersonalModelReplacement {
++  readonly modelId: ModelId;
++  readonly config: ModelConfig;
++}
++
+ export interface CreatePersonalProviderInput {
+   readonly templateId?: ProviderTemplateId;
+   readonly providerName?: string;
+@@ -365,6 +373,78 @@ export class ProviderConfigService implements ProviderSource<ProviderConfigSnaps
+     });
+   }
+ 
++  /**
++   * 用外部目录（网关 /v1/models 这类）整体替换一个 Personal Provider 的模型集合。
++   *
++   * 成员、顺序、每个模型的配置在同一次事务里写完：逐个 add/delete 的中间态会让
++   * 列表短暂地缺模型或多出重复项，也会让一次同步产生十几次磁盘写与 View 广播。
++   *
++   * 目录里没有的**继承**模型（模板 builtin）被显式停用，而不是删掉——继承成员
++   * 归模板所有，停用是这个 Provider 唯一能表达的"网关已经没有它了"。
++   */
++  async replacePersonalModels(
++    providerId: ProviderId,
++    models: readonly PersonalModelReplacement[],
++    membership?: ProviderModelMembership,
++  ): Promise<ProviderConfigLayerSnapshot> {
++    const normalizedProviderId = normalizeId("providerId", providerId);
++    const entries: PersonalModelReplacement[] = [];
++    const seen = new Set<ModelId>();
++    for (const model of models) {
++      const modelId = normalizeId("modelId", model.modelId);
++      if (seen.has(modelId)) continue;
++      seen.add(modelId);
++      entries.push({ modelId, config: model.config });
++    }
++    const zcodeBuiltin = await this.#zcodeBuiltinSource.read();
++    return this.#updatePersonal((current) => {
++      assertMembershipCurrent(membership, normalizedProviderId, current);
++      const provider = writableProviderOverlay(zcodeBuiltin, current, normalizedProviderId);
++      const builtinModelIds =
++        membership?.inheritedModelIds ??
++        resolveProviderBuiltinModelIds(zcodeBuiltin, current.providers, normalizedProviderId);
++      const personalModelIds = entries
++        .map((entry) => entry.modelId)
++        .filter((modelId) => !builtinModelIds.includes(modelId));
++      let nextModels = current.models.deleteExactForProvider(normalizedProviderId);
++      for (const entry of entries) {
++        // 用户在设置页关掉的模型保持关闭：目录同步刷新的是能力参数，
++        // 不是替用户重新做"我要不要这个模型"的决定。
++        const previousEnabled = current.models.getExact(
++          normalizedProviderId,
++          entry.modelId,
++        )?.enabled;
++        nextModels = nextModels.setExact(
++          normalizedProviderId,
++          entry.modelId,
++          entry.config.overlay(new ModelConfig({ enabled: previousEnabled ?? true })),
++        );
++      }
++      for (const inheritedId of builtinModelIds) {
++        if (seen.has(inheritedId)) continue;
++        nextModels = nextModels.setExact(
++          normalizedProviderId,
++          inheritedId,
++          new ModelConfig({ enabled: false }),
++        );
++      }
++      return {
++        providers: current.providers.set(
++          normalizedProviderId,
++          provider.withPersonalModelIds(personalModelIds).withModelOrder(
++            normalizeModelOrder(
++              builtinModelIds,
++              personalModelIds,
++              entries.map((entry) => entry.modelId),
++            ),
++          ),
++        ),
++        models: nextModels,
++        providerOrder: current.providerOrder,
++      };
++    });
++  }
++
+   async renamePersonalModel(
+     providerId: ProviderId,
+     currentModelId: ModelId,
+diff --git a/packages/provider/src/facades.ts b/packages/provider/src/facades.ts
+index 015acca..45c04d4 100644
+--- a/packages/provider/src/facades.ts
++++ b/packages/provider/src/facades.ts
+@@ -1,6 +1,6 @@
+ /* oxlint-disable eslint(max-lines) -- Settings/Selection Facade 共享同一套 Registry 投影与写入边界。 */
+ import type { ConfigValidationIssue } from "./config-overlay.js";
+-import type { ProviderModelMembership } from "./config-service.js";
++import type { PersonalModelReplacement, ProviderModelMembership } from "./config-service.js";
+ import type {
+   ModelConfig,
+   ModelConfigObject,
+@@ -72,6 +72,11 @@ export interface ProviderSettingsMutationTarget {
+     membership?: ProviderModelMembership,
+     useRecommendedConfig?: boolean,
+   ): Promise<unknown>;
++  replacePersonalModels(
++    providerId: ProviderId,
++    models: readonly PersonalModelReplacement[],
++    membership?: ProviderModelMembership,
++  ): Promise<unknown>;
+   renamePersonalModel(
+     providerId: ProviderId,
+     currentModelId: ModelId,
+@@ -372,6 +377,25 @@ export class ProviderSettingsFacade {
+     );
+   }
+ 
++  /**
++   * 用外部目录整体替换一个 Personal Provider 的模型集合（成员 / 顺序 / 配置一起写）。
++   */
++  replacePersonalModels(
++    providerId: ProviderId,
++    models: ReadonlyArray<{ readonly modelId: ModelId; readonly config: ModelConfigObject }>,
++  ): Promise<ProviderSettingsView> {
++    return this.#mutateProvider(providerId, "replace-models", (target) =>
++      target.replacePersonalModels(
++        providerId,
++        models.map((model) => ({
++          modelId: model.modelId,
++          config: parseModelConfig(model.config),
++        })),
++        this.#modelMembership(providerId),
++      ),
++    );
++  }
++
+   renamePersonalModel(
+     providerId: ProviderId,
+     currentModelId: ModelId,
+diff --git a/packages/services/src/index.ts b/packages/services/src/index.ts
+index 12577b8..c434e15 100644
+--- a/packages/services/src/index.ts
++++ b/packages/services/src/index.ts
+@@ -214,6 +214,15 @@ export { IFileWatcherService } from "./fileWatcher/fileWatcher.js";
+ 
+ // OAuth service — IOAuthService is both a type (interface) and value (descriptor)
+ export { IOAuthService } from "./oauth/oauth.js";
++// AI Proxy 网关 OAuth 登录的结果类型；实现依赖 node:http/node:crypto，只能从
++// @zcode/services/node 侧装配，这里保持 browser-safe 的类型出口。
++export type {
++  AiProxyOAuthFailure,
++  AiProxyOAuthFailureCode,
++  AiProxyOAuthPollResult,
++  AiProxyOAuthStartResponse,
++  AiProxyOAuthToken,
++} from "./oauth/aiProxyOAuth.js";
+ 
+ // UsageStats service — IUsageStatsService is both a type (interface) and value (descriptor)
+ export { IUsageStatsService } from "./usage-stats/usageStats.js";
+diff --git a/packages/services/src/model-provider/aiProxyModelCatalog.ts b/packages/services/src/model-provider/aiProxyModelCatalog.ts
+new file mode 100644
+index 0000000..c63e962
+--- /dev/null
++++ b/packages/services/src/model-provider/aiProxyModelCatalog.ts
+@@ -0,0 +1,145 @@
++/**
++ * AI Proxy 网关模型目录 → ZCode 模型配置的映射。
++ *
++ * 网关的 `GET /v1/models` 是它自己对"这个 id 会怎么被服务"的回答：上下文窗口、
++ * 思考档位、输入模态、端点面（modality）。这里只做翻译，不发请求，也不写配置——
++ * 网络与落盘分别由宿主侧的 catalog 取数与 Provider Settings 的替换事务负责。
++ *
++ * 放在 services 根入口（browser-safe）：它只消费类型与纯函数，Renderer 侧的
++ * 登录流程与宿主侧的启动同步共用同一份映射，避免两边对同一份网关数据给出不同配置。
++ */
++import type { ModelConfigObject } from "@zcode/provider";
++
++export interface AiProxyCatalogEntry {
++  readonly id: string;
++  readonly contextWindow: number | null;
++  /** 网关发布的单模型输出上限；当前网关不发布，缺失时按下文的窗口回落。 */
++  readonly maxOutputTokens: number | null;
++  /** 网关给出的思考档位；空数组是"明确没有思考档位"，null 是"网关没说"。 */
++  readonly effortLevels: readonly string[] | null;
++  readonly inputModalities: readonly string[];
++  /** 网关自己声明的服务面（chat / image / …）；缺失表示网关没有回答。 */
++  readonly modality: string | null;
++}
++
++/**
++ * OpenAI 兼容 chat 请求的思考档位字段。网关把 `reasoning_effort` 当通用思考旋钮，
++ * 再按上游协议翻译；客户端只说"要哪一档"，不说"翻译成什么"。
++ */
++const REASONING_EFFORT_MAP = '{"reasoning_effort": reasoningLevel}';
++
++/**
++ * 输出上限的请求字段。网关把 chat 面的输出上限拼成 `max_tokens`
++ * （responses 面才是 `max_output_tokens`，由网关自己翻译），这里只说客户端看到的字段。
++ */
++const MAX_OUTPUT_TOKENS_MAP = '{"max_tokens": maxOutputTokens}';
++
++function asRecord(value: unknown): Record<string, unknown> | null {
++  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
++}
++
++function asTrimmedString(value: unknown): string | null {
++  return typeof value === "string" && value.trim() ? value.trim() : null;
++}
++
++function asPositiveInt(value: unknown): number | null {
++  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
++}
++
++function asStringArray(value: unknown): string[] | null {
++  if (!Array.isArray(value)) return null;
++  return value.map((item) => asTrimmedString(item)).filter((item): item is string => item !== null);
++}
++
++/**
++ * 解析 `/v1/models` 响应。兼容 `{data: []}`（OpenAI 形状）与 `{models: []}`
++ * （网关早期形状）；解不出来的条目直接跳过而不是伪造字段。
++ */
++export function readAiProxyCatalog(document: unknown): AiProxyCatalogEntry[] {
++  const root = asRecord(document);
++  if (!root) return [];
++  const rows = Array.isArray(root.data) ? root.data : Array.isArray(root.models) ? root.models : [];
++  const entries: AiProxyCatalogEntry[] = [];
++  const seen = new Set<string>();
++  for (const row of rows) {
++    const record = asRecord(row);
++    const id = record ? asTrimmedString(record.id) : null;
++    if (!record || !id || seen.has(id)) continue;
++    seen.add(id);
++    entries.push({
++      id,
++      contextWindow: asPositiveInt(record.context_window),
++      maxOutputTokens: asPositiveInt(record.max_output_tokens),
++      effortLevels: asStringArray(record.effort_levels),
++      inputModalities: asStringArray(record.input_modalities) ?? [],
++      modality: asTrimmedString(record.modality),
++    });
++  }
++  return entries;
++}
++
++/**
++ * 目录里能进 ZCode 模型列表的只有 chat 面。
++ *
++ * 网关的 `modality` 说的是"这个 id 由哪个端点服务"，chat 面的取值是 `text`
++ * （见网关 internal/modality）；`image` / `embedding` 这类 id 走别的端点，
++ * 放进模型选择器只会得到一次必然失败的请求。缺失该字段表示网关没回答，按 chat 放行。
++ */
++export function isAiProxyChatModel(entry: AiProxyCatalogEntry): boolean {
++  return entry.modality === null || entry.modality === "text" || entry.modality === "chat";
++}
++
++function buildInputFormat(modalities: readonly string[]): ModelConfigObject["properties"] {
++  const has = (name: string): boolean => modalities.includes(name);
++  return {
++    inputFormat: {
++      supportsText: modalities.length === 0 || has("text"),
++      supportsImage: has("image"),
++      supportsVideo: has("video"),
++      supportsAudio: has("audio"),
++      supportsPdf: has("pdf"),
++    },
++  };
++}
++
++/**
++ * 一条网关目录项 → 一条 ZCode 模型配置。
++ *
++ * 只写网关能证明的字段：上下文窗口、输入模态、思考档位、JSON Schema 输出
++ * （网关按请求体转协议，结构化输出在它这一层就是可用的）。其余能力（工具调用、
++ * 输出格式、system 中插话）继续走内置模型规则给的默认值，不在这里重复声明。
++ */
++export function buildAiProxyModelConfig(entry: AiProxyCatalogEntry): ModelConfigObject {
++  const properties: NonNullable<ModelConfigObject["properties"]> = {
++    ...buildInputFormat(entry.inputModalities),
++    supportsJsonSchemaOutput: true,
++  };
++  if (entry.contextWindow !== null) {
++    properties.contextWindow = entry.contextWindow;
++  }
++  const config: {
++    enabled: boolean;
++    properties: NonNullable<ModelConfigObject["properties"]>;
++    optionSpecs?: NonNullable<ModelConfigObject["optionSpecs"]>;
++  } = { enabled: true, properties };
++  const optionSpecs: NonNullable<ModelConfigObject["optionSpecs"]> = {};
++  if (entry.effortLevels !== null) {
++    // 空档位是"网关明确说这个模型没有思考档位"，用 null 表达"不提供该选项"，
++    // 而不是留空继承别的模型（尤其是智谱）的档位。
++    optionSpecs.reasoningLevel =
++      entry.effortLevels.length === 0
++        ? null
++        : { values: [...entry.effortLevels], map: REASONING_EFFORT_MAP };
++  }
++  // 网关不发布单模型的 vendor 输出上限，而 ZCode 的每一步请求都必须带一个输出预算
++  // （resolveNormalRequestMaxOutputTokens 直接取这个 max）。给不出更细的事实时就以窗口为上界：
++  // 模型不可能输出超过自己窗口的内容，网关与上游再按真实上限裁剪。
++  const maxOutputTokens = entry.maxOutputTokens ?? entry.contextWindow;
++  if (maxOutputTokens !== null) {
++    optionSpecs.maxOutputTokens = { max: maxOutputTokens, map: MAX_OUTPUT_TOKENS_MAP };
++  }
++  if (Object.keys(optionSpecs).length > 0) {
++    config.optionSpecs = optionSpecs;
++  }
++  return config;
++}
+diff --git a/packages/services/src/model-provider/providerFacadeServices.ts b/packages/services/src/model-provider/providerFacadeServices.ts
+index 83c0d0c..c94b4ea 100644
+--- a/packages/services/src/model-provider/providerFacadeServices.ts
++++ b/packages/services/src/model-provider/providerFacadeServices.ts
+@@ -17,6 +17,11 @@ import {
+   type SavePersonalModelDraftInput,
+ } from "@zcode/provider";
+ import { createServiceDescriptor } from "../descriptors.js";
++import {
++  buildAiProxyModelConfig,
++  isAiProxyChatModel,
++  type AiProxyCatalogEntry,
++} from "./aiProxyModelCatalog.js";
+ import type { ModelConnectivityResult } from "@zcode/shared";
+ import { createServiceLogger } from "../logger/serviceLogger.js";
+ 
+@@ -68,8 +73,30 @@ export interface IProviderSettingsService {
+   testModelConnectivity(
+     input: ProviderSettingsConnectivityRequest,
+   ): Promise<ModelConnectivityResult>;
++
++  /**
++   * 用 AI Proxy 网关的 `/v1/models` 重写该 Provider 的模型集合。
++   *
++   * 供应商的模型目录会变（新增、下线、上下文窗口调整、思考档位变化），而
++   * Provider 凭据不变；登录后、软件启动时与设置页打开时都走这一条，让本地列表
++   * 始终等于网关当下能服务的集合。
++   */
++  syncAiProxyModels(providerId: ProviderId): Promise<AiProxyModelSyncResult>;
++}
++
++export interface AiProxyModelSyncResult {
++  readonly providerId: ProviderId;
++  readonly modelIds: readonly ModelId[];
++  /** 网关目录里非 chat 面、因此没有进 ZCode 模型列表的 id。 */
++  readonly skippedModelIds: readonly string[];
+ }
+ 
++/** 宿主侧取数：走宿主网络栈（代理、企业 CA）请求网关目录。 */
++export type AiProxyCatalogFetcher = (input: {
++  readonly baseUrl: string;
++  readonly apiKey: string;
++}) => Promise<readonly AiProxyCatalogEntry[]>;
++
+ export const IProviderSettingsService = createServiceDescriptor<IProviderSettingsService>(
+   ServiceChannels.ProviderSettings,
+ );
+@@ -110,6 +137,7 @@ export function createProviderSettingsService(
+   facade: ProviderSettingsFacade,
+   ensureReady: () => Promise<void> = async () => {},
+   testConnectivity?: ProviderSettingsConnectivityTester,
++  fetchAiProxyCatalog?: AiProxyCatalogFetcher,
+ ): IProviderSettingsService {
+   return {
+     onDidChange: toEvent((listener) => facade.onDidChange(listener)),
+@@ -165,6 +193,45 @@ export function createProviderSettingsService(
+       await ensureReady();
+       return facade.setPersonalModelEnabled(providerId, modelId, enabled);
+     },
++    syncAiProxyModels: async (providerId) => {
++      await ensureReady();
++      if (!fetchAiProxyCatalog) {
++        throw new Error("当前 Environment 未装配 AI Proxy 模型目录同步能力");
++      }
++      const provider = facade.getView().providers.find((item) => item.providerId === providerId);
++      if (!provider) {
++        throw new Error(`Provider 不存在: ${providerId}`);
++      }
++      const access = provider.effectiveConfig.access;
++      const apiKey =
++        access && (access.type === "api-key" || access.type === "zhipu-coding-plan-api-key")
++          ? access.apiKey?.trim()
++          : undefined;
++      const baseUrl = provider.effectiveConfig.api?.baseUrl?.trim();
++      if (!apiKey || !baseUrl) {
++        throw new Error("该 Provider 还没有网关地址或凭据，无法同步模型目录");
++      }
++      const entries = await fetchAiProxyCatalog({ baseUrl, apiKey });
++      const chatEntries = entries.filter(isAiProxyChatModel);
++      if (chatEntries.length === 0) {
++        // 空目录一律按失败处理：网关临时抽风不该把用户已有的模型列表清空。
++        throw new Error("网关没有返回任何可用的 chat 模型");
++      }
++      await facade.replacePersonalModels(
++        providerId,
++        chatEntries.map((entry) => ({
++          modelId: entry.id,
++          config: buildAiProxyModelConfig(entry),
++        })),
++      );
++      return {
++        providerId,
++        modelIds: chatEntries.map((entry) => entry.id),
++        skippedModelIds: entries
++          .filter((entry) => !isAiProxyChatModel(entry))
++          .map((entry) => entry.id),
++      };
++    },
+     testModelConnectivity: async (input) => {
+       await ensureReady();
+       if (!testConnectivity) {
+diff --git a/packages/services/src/model-provider/providerRuntime.ts b/packages/services/src/model-provider/providerRuntime.ts
+index bdc6277..cf94d6f 100644
+--- a/packages/services/src/model-provider/providerRuntime.ts
++++ b/packages/services/src/model-provider/providerRuntime.ts
+@@ -11,6 +11,8 @@ import {
+   type ProviderSettingsMutationTarget,
+   type ProviderSource,
+ } from "@zcode/provider";
++import { BUILTIN_PROVIDER_TEMPLATE_IDS } from "@zcode/shared";
++import { createServiceLogger } from "../logger/serviceLogger.js";
+ import {
+   createProviderConfigRuntime,
+   type ProviderConfigRuntime,
+@@ -19,6 +21,7 @@ import {
+ import {
+   createModelSelectionService,
+   createProviderSettingsService,
++  type AiProxyCatalogFetcher,
+   type IModelSelectionService,
+   type IProviderSettingsService,
+   type ModelSelectionConfiguredDefaultSource,
+@@ -28,6 +31,7 @@ import {
+ export interface ProviderRuntimeOptions extends ProviderConfigRuntimeOptions {
+   readonly accountSource?: RefreshableProviderSource<AccountProviderConfigSnapshot>;
+   readonly testConnectivity?: ProviderSettingsConnectivityTester;
++  readonly fetchAiProxyCatalog?: AiProxyCatalogFetcher;
+ }
+ 
+ export interface ProviderRuntimeDependencies {
+@@ -35,6 +39,7 @@ export interface ProviderRuntimeDependencies {
+   readonly accountSource?: RefreshableProviderSource<AccountProviderConfigSnapshot>;
+   readonly disposeAccountSource?: () => void;
+   readonly testConnectivity?: ProviderSettingsConnectivityTester;
++  readonly fetchAiProxyCatalog?: AiProxyCatalogFetcher;
+   readonly modelSelectionConfiguredDefaultSource?: ModelSelectionConfiguredDefaultSource;
+   readonly disposeModelSelectionConfiguredDefaultSource?: () => void;
+ }
+@@ -43,6 +48,14 @@ interface RefreshableProviderSource<TSnapshot> extends ProviderSource<TSnapshot>
+   refresh?(reason: string): Promise<TSnapshot>;
+ }
+ 
++const log = createServiceLogger("provider-runtime");
++
++/**
++ * 网关模型目录自动刷新间隔。网关的模型集合变化是低频事件（上架/下线/改档位），
++ * 每半小时问一次足够跟上，也不会把长会话里的网关查询变成负担。
++ */
++const AI_PROXY_MODEL_SYNC_INTERVAL_MS = 30 * 60 * 1000;
++
+ /**
+  * 普通 API Provider 可以在账号能力尚未装配时独立运行。
+  * Account Provider 由当前 Built-in revision 对齐的 access.entitled=false Overlay 显式 fail-closed。
+@@ -69,6 +82,8 @@ export class ProviderRuntime {
+   readonly #disposeAccountSource?: () => void;
+   readonly #disposeBuiltinRecovery: () => void;
+   readonly #modelSelectionRuntime: IModelSelectionService & { dispose(): void };
++  #aiProxySyncTimer: ReturnType<typeof setInterval> | null = null;
++  #aiProxySyncInFlight: Promise<void> | null = null;
+   readonly #disposeModelSelectionConfiguredDefaultSource?: () => void;
+   #startPromise: ReturnType<ProviderRegistryService["start"]> | null = null;
+   #disposed = false;
+@@ -105,6 +120,7 @@ export class ProviderRuntime {
+       settingsFacade,
+       ensureReady,
+       dependencies.testConnectivity,
++      dependencies.fetchAiProxyCatalog,
+     );
+     this.#modelSelectionRuntime = createModelSelectionService(
+       createNodeModelSelectionFacade(this.registryService),
+@@ -117,7 +133,12 @@ export class ProviderRuntime {
+   start(): Promise<void> {
+     if (this.#disposed) throw new Error("ProviderRuntime 已 dispose");
+     if (this.#startPromise) return this.#startPromise;
+-    const startPromise = this.#configRuntime.start().then(() => this.registryService.start());
++    const startPromise = this.#configRuntime
++      .start()
++      .then(() => this.registryService.start())
++      .then(() => {
++        this.#startAiProxyModelSync();
++      });
+     this.#startPromise = startPromise;
+     void startPromise.catch(() => {
+       if (this.#startPromise === startPromise) this.#startPromise = null;
+@@ -128,6 +149,10 @@ export class ProviderRuntime {
+   dispose(): void {
+     if (this.#disposed) return;
+     this.#disposed = true;
++    if (this.#aiProxySyncTimer) {
++      clearInterval(this.#aiProxySyncTimer);
++      this.#aiProxySyncTimer = null;
++    }
+     this.#disposeBuiltinRecovery();
+     this.#modelSelectionRuntime.dispose();
+     this.registryService.dispose();
+@@ -135,6 +160,68 @@ export class ProviderRuntime {
+     this.#disposeModelSelectionConfiguredDefaultSource?.();
+     this.#configRuntime.dispose();
+   }
++
++  /**
++   * 软件启动时同步一次网关模型目录，之后按固定间隔再同步。
++   *
++   * 单飞：启动同步、设置页打开与定时刷新可能同时触发，重复请求既浪费网关查询，
++   * 也会让同一时刻有两次配置写入。失败只记录日志——网关不可达不该阻断启动，
++   * 也不该把上一次同步出来的模型列表清空。
++   */
++  syncAiProxyGatewayModels(reason: string): Promise<void> {
++    const inFlight = this.#aiProxySyncInFlight;
++    if (inFlight) return inFlight;
++    const run = this.#runAiProxyModelSync(reason).finally(() => {
++      if (this.#aiProxySyncInFlight === run) this.#aiProxySyncInFlight = null;
++    });
++    this.#aiProxySyncInFlight = run;
++    return run;
++  }
++
++  #startAiProxyModelSync(): void {
++    void this.syncAiProxyGatewayModels("startup");
++    if (this.#aiProxySyncTimer) return;
++    this.#aiProxySyncTimer = setInterval(() => {
++      void this.syncAiProxyGatewayModels("interval");
++    }, AI_PROXY_MODEL_SYNC_INTERVAL_MS);
++    // 定时器不是进程存活理由：只有 Host 还在跑的时候它才有意义。
++    this.#aiProxySyncTimer.unref?.();
++  }
++
++  async #runAiProxyModelSync(reason: string): Promise<void> {
++    if (this.#disposed) return;
++    let view: Awaited<ReturnType<IProviderSettingsService["getView"]>>;
++    try {
++      view = await this.providerSettings.getView();
++    } catch (error) {
++      log.warn(undefined, "AI Proxy 模型同步读取 Provider 视图失败", { reason, error });
++      return;
++    }
++    for (const provider of view.providers) {
++      if (this.#disposed) return;
++      if (provider.templateId !== BUILTIN_PROVIDER_TEMPLATE_IDS.aiProxy) continue;
++      // 还没有凭据的 Provider（模板预设、用户没登录）保持原样：模板自带 access
++      // 类型与网关地址，只有 apiKey 才是"这个 Provider 真的能请求网关"的证据。
++      const access = provider.effectiveConfig.access;
++      const apiKey = access?.type === "api-key" ? access.apiKey?.trim() : undefined;
++      if (!apiKey || !provider.effectiveConfig.api?.baseUrl) continue;
++      try {
++        const result = await this.providerSettings.syncAiProxyModels(provider.providerId);
++        log.info(undefined, "AI Proxy 模型目录已同步", {
++          reason,
++          providerId: provider.providerId,
++          models: result.modelIds.length,
++          skipped: result.skippedModelIds.length,
++        });
++      } catch (error) {
++        log.warn(undefined, "AI Proxy 模型目录同步失败", {
++          reason,
++          providerId: provider.providerId,
++          error,
++        });
++      }
++    }
++  }
+ }
+ 
+ function createSettingsMutationTarget(
+@@ -153,6 +240,8 @@ function createSettingsMutationTarget(
+       configService.reorderPersonalModels(providerId, modelIds, membership),
+     // 手工四参数转发曾丢掉新增的配置模式；直接绑定完整签名，避免装配层截断写入意图。
+     addPersonalModel: configService.addPersonalModel.bind(configService),
++    replacePersonalModels: (providerId, models, membership) =>
++      configService.replacePersonalModels(providerId, models, membership),
+     renamePersonalModel: (providerId, currentModelId, nextModelId, membership) =>
+       configService.renamePersonalModel(providerId, currentModelId, nextModelId, membership),
+     deletePersonalModel: (providerId, modelId, membership) =>
+@@ -194,7 +283,7 @@ function createSettingsMutationTarget(
+ }
+ 
+ export function createProviderRuntime(options: ProviderRuntimeOptions): ProviderRuntime {
+-  const { accountSource, testConnectivity, ...configRuntimeOptions } = options;
++  const { accountSource, testConnectivity, fetchAiProxyCatalog, ...configRuntimeOptions } = options;
+   const configRuntime = createProviderConfigRuntime(configRuntimeOptions);
+   const modelSelectionConfiguredDefaultSource = new NodeModelSelectionConfigRepository({
+     personalRepository: configRuntime.personalRepository,
+@@ -203,6 +292,7 @@ export function createProviderRuntime(options: ProviderRuntimeOptions): Provider
+     configRuntime,
+     accountSource,
+     testConnectivity,
++    fetchAiProxyCatalog,
+     modelSelectionConfiguredDefaultSource,
+     disposeModelSelectionConfiguredDefaultSource: () =>
+       modelSelectionConfiguredDefaultSource.dispose(),
+diff --git a/packages/services/src/node.ts b/packages/services/src/node.ts
+index 8489c4c..780f017 100644
+--- a/packages/services/src/node.ts
++++ b/packages/services/src/node.ts
+@@ -166,6 +166,9 @@ export type {
+   ProviderRuntimeDependencies,
+   ProviderRuntimeOptions,
+ } from "./model-provider/providerRuntime.js";
++import { readAiProxyCatalog } from "./model-provider/aiProxyModelCatalog.js";
++export type { AiProxyCatalogEntry } from "./model-provider/aiProxyModelCatalog.js";
++
+ export {
+   createProviderProvisioningSource,
+   listProviderProvisioningCredentialKeys,
+@@ -1611,9 +1614,22 @@ export function createLocalServices(options: {
+   let providerConnectivityAgentService:
+     | Pick<IZCodeAgentService, "testModelConnectivity">
+     | undefined;
++  // 网关模型目录取数：走宿主网络栈（企业代理 / 自签 CA 与其它 Provider 请求同源），
++  // 由 Renderer 之外的这一层发请求，避免把用户的网关密钥暴露给页面上下文。
++  const fetchAiProxyCatalog = async (input: { baseUrl: string; apiKey: string }) => {
++    const url = `${input.baseUrl.replace(/\/+$/, "")}/models`;
++    const response = await apiClient.request(url, {
++      headers: { authorization: `Bearer ${input.apiKey}`, accept: "application/json" },
++    });
++    if (!response.ok) {
++      throw new Error(`网关模型目录不可用（HTTP ${response.status}）`);
++    }
++    return readAiProxyCatalog(await response.json());
++  };
+   const providerRuntime = createProviderRuntimeFromConfigRuntime({
+     configRuntime: providerConfigRuntime,
+     accountSource: accountProviderConfigSource,
++    fetchAiProxyCatalog,
+     modelSelectionConfiguredDefaultSource,
+     disposeModelSelectionConfiguredDefaultSource: () =>
+       modelSelectionConfiguredDefaultSource.dispose(),
+diff --git a/packages/services/src/oauth/aiProxyOAuth.ts b/packages/services/src/oauth/aiProxyOAuth.ts
+new file mode 100644
+index 0000000..5accfef
+--- /dev/null
++++ b/packages/services/src/oauth/aiProxyOAuth.ts
+@@ -0,0 +1,407 @@
++/**
++ * AI Proxy 网关的客户端 OAuth 登录：授权码 + PKCE(S256) + 127.0.0.1 回环回调。
++ *
++ * 这里的授权服务器是网关自己，不是智谱账号：客户端拿到的推理凭据由网关签发，
++ * 额度和模型权限与静态 API Key 共用同一套 entitlement。协议细节见网关仓库
++ * docs/clients/oauth-login.md——发现文档、统一 public client、强制 S256、
++ * 回环回调只接受 IP literal，都是那份文档定下的规则。
++ *
++ * 回环监听放在宿主进程而不是 renderer：浏览器授权页可以由 renderer 打开，但
++ * 授权码只能在宿主侧收（renderer 不能监听端口），令牌兑换也顺带避开了 CORS。
++ */
++import { createHash, randomBytes } from "node:crypto";
++import { createServer, type Server, type ServerResponse } from "node:http";
++
++/** 公共客户端 id；网关对未注册的 client_id 给最小能力集（回环 + 粘贴码 + scope api）。 */
++export const AI_PROXY_OAUTH_CLIENT_ID = "zcode-desktop";
++/** 回环回调路径；回调主机必须是 IP literal，`localhost` 会被网关拒绝。 */
++export const AI_PROXY_OAUTH_CALLBACK_PATH = "/oauth/callback";
++
++const LOOPBACK_HOST = "127.0.0.1";
++const FLOW_TIMEOUT_MS = 5 * 60 * 1000;
++/** 网关只授予 scope api；请求别的值会被授权端点直接拒绝。 */
++const OAUTH_SCOPE = "api";
++/**
++ * 网关允许客户端申请更长的令牌租期（硬上限 366 天）。宿主把访问令牌当静态凭据
++ * 写进 Provider 配置，没有刷新通道，所以按一年申请；不支持该参数的网关会忽略它，
++ * 回落默认的一小时租期。
++ */
++const REQUESTED_ACCESS_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
++
++export interface AiProxyOAuthStartResponse {
++  readonly flowId: string;
++  readonly authorizeUrl: string;
++  readonly redirectUri: string;
++}
++
++export interface AiProxyOAuthToken {
++  readonly baseUrl: string;
++  readonly accessToken: string;
++  readonly refreshToken: string | null;
++  readonly expiresInSeconds: number | null;
++  readonly scope: string | null;
++}
++
++export type AiProxyOAuthFailureCode =
++  | "authorization-denied"
++  | "state-mismatch"
++  | "missing-code"
++  | "timeout"
++  | "token-exchange-failed"
++  | "unknown-flow";
++
++export interface AiProxyOAuthFailure {
++  readonly code: AiProxyOAuthFailureCode;
++  readonly message: string;
++}
++
++export type AiProxyOAuthPollResult =
++  | { readonly state: "completed"; readonly token: AiProxyOAuthToken }
++  | { readonly state: "failed"; readonly error: AiProxyOAuthFailure };
++
++export interface AiProxyOAuthFlowOptions {
++  /** 走宿主网络栈（代理、企业 CA）时由调用方注入。 */
++  readonly request?: (input: string | URL, init?: RequestInit) => Promise<Response>;
++  readonly timeoutMs?: number;
++}
++
++interface GatewayMetadata {
++  readonly authorizationEndpoint: string;
++  readonly tokenEndpoint: string;
++}
++
++interface PendingFlow {
++  readonly flowId: string;
++  readonly baseUrl: string;
++  readonly metadata: GatewayMetadata;
++  readonly verifier: string;
++  readonly state: string;
++  readonly redirectUri: string;
++  readonly server: Server;
++  readonly timer: NodeJS.Timeout;
++  code: string | null;
++  failure: AiProxyOAuthFailure | null;
++  exchanging: boolean;
++}
++
++const defaultRequest = (input: string | URL, init?: RequestInit): Promise<Response> =>
++  fetch(input, init);
++
++function describeError(error: unknown): string {
++  return error instanceof Error ? error.message : String(error);
++}
++
++/**
++ * 规范化网关地址：允许省略协议，去掉查询/哈希与末尾斜杠，保留子路径前缀
++ * （自建网关可能挂在 `/gateway` 这类前缀下，发现文档与 API 都要跟着它）。
++ */
++export function normalizeAiProxyBaseUrl(raw: string): string {
++  const trimmed = raw.trim();
++  if (!trimmed) {
++    throw new Error("网关地址不能为空");
++  }
++  const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
++  let url: URL;
++  try {
++    url = new URL(candidate);
++  } catch {
++    throw new Error("网关地址不是合法的 URL");
++  }
++  if (url.protocol !== "https:" && url.protocol !== "http:") {
++    throw new Error("网关地址必须使用 http/https");
++  }
++  url.search = "";
++  url.hash = "";
++  return url.toString().replace(/\/+$/, "");
++}
++
++/** 网关推理前缀：Provider 的 baseUrl 是 `/v1`，授权服务器则在站点根。 */
++export function buildAiProxyApiBaseUrl(baseUrl: string): string {
++  return `${baseUrl.replace(/\/+$/, "")}/v1`;
++}
++
++function readEndpoint(document: unknown, key: "authorization_endpoint" | "token_endpoint"): string {
++  if (typeof document === "object" && document !== null) {
++    const value = (document as Record<string, unknown>)[key];
++    if (typeof value === "string" && value.trim()) {
++      return value.trim();
++    }
++  }
++  throw new Error(`网关发现文档缺少 ${key}`);
++}
++
++function readField(payload: unknown, key: string): unknown {
++  return typeof payload === "object" && payload !== null
++    ? (payload as Record<string, unknown>)[key]
++    : undefined;
++}
++
++function asTrimmedString(value: unknown): string | null {
++  return typeof value === "string" && value.trim() ? value.trim() : null;
++}
++
++function asFiniteNumber(value: unknown): number | null {
++  return typeof value === "number" && Number.isFinite(value) ? value : null;
++}
++
++function renderCallbackPage(input: { ok: boolean; message: string }): string {
++  const title = input.ok ? "授权完成" : "授权失败";
++  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8" />
++<title>${title}</title>
++<style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
++font-family:system-ui,-apple-system,"PingFang SC",sans-serif;background:#0b0b0c;color:#f5f5f5}
++main{max-width:24rem;padding:2rem;text-align:center}code{color:#a1a1aa}</style></head>
++<body><main><h1>${title}</h1><p>${input.message}</p>
++<p><code>可以关闭此页面并返回 ZCode</code></p></main></body></html>`;
++}
++
++/**
++ * 单流程的 AI Proxy OAuth 登录状态机：`start` 绑定回环端口并给出授权地址，
++ * `poll` 在浏览器回调到达后兑换令牌，`cancel` 随时释放端口。
++ *
++ * 同时只保留一个流程：用户重新发起登录时旧流程连同它的端口一起作废。
++ */
++export class AiProxyOAuthFlow {
++  readonly #request: (input: string | URL, init?: RequestInit) => Promise<Response>;
++  readonly #timeoutMs: number;
++  #flow: PendingFlow | null = null;
++
++  constructor(options: AiProxyOAuthFlowOptions = {}) {
++    this.#request = options.request ?? defaultRequest;
++    this.#timeoutMs = options.timeoutMs ?? FLOW_TIMEOUT_MS;
++  }
++
++  async start(rawBaseUrl: string): Promise<AiProxyOAuthStartResponse> {
++    this.cancel();
++    const baseUrl = normalizeAiProxyBaseUrl(rawBaseUrl);
++    const metadata = await this.#discover(baseUrl);
++
++    const verifier = randomBytes(48).toString("base64url");
++    const challenge = createHash("sha256").update(verifier).digest("base64url");
++    const state = randomBytes(16).toString("hex");
++    const flowId = randomBytes(16).toString("hex");
++    const { server, redirectUri } = await this.#listen(flowId);
++    const flow: PendingFlow = {
++      flowId,
++      baseUrl,
++      metadata,
++      verifier,
++      state,
++      redirectUri,
++      server,
++      // 超时也要收口：端口、流程一起释放，UI 下一次轮询就能看到失败原因。
++      timer: setTimeout(() => {
++        this.#fail(flow, { code: "timeout", message: "授权等待超时，请重新发起登录" });
++      }, this.#timeoutMs),
++      code: null,
++      failure: null,
++      exchanging: false,
++    };
++    this.#flow = flow;
++
++    const authorizeUrl = new URL(metadata.authorizationEndpoint);
++    authorizeUrl.searchParams.set("client_id", AI_PROXY_OAUTH_CLIENT_ID);
++    authorizeUrl.searchParams.set("response_type", "code");
++    authorizeUrl.searchParams.set("redirect_uri", redirectUri);
++    authorizeUrl.searchParams.set("scope", OAUTH_SCOPE);
++    authorizeUrl.searchParams.set("state", state);
++    authorizeUrl.searchParams.set("code_challenge", challenge);
++    authorizeUrl.searchParams.set("code_challenge_method", "S256");
++    return { flowId, authorizeUrl: authorizeUrl.toString(), redirectUri };
++  }
++
++  async poll(flowId: string): Promise<AiProxyOAuthPollResult | null> {
++    const flow = this.#flow;
++    if (!flow || flow.flowId !== flowId) {
++      return {
++        state: "failed",
++        error: { code: "unknown-flow", message: "登录流程已失效，请重新发起" },
++      };
++    }
++    if (flow.exchanging) {
++      return null;
++    }
++    if (flow.failure) {
++      const error = flow.failure;
++      this.#release(flow);
++      return { state: "failed", error };
++    }
++    const code = flow.code;
++    if (!code) {
++      return null;
++    }
++    flow.code = null;
++    flow.exchanging = true;
++    try {
++      const token = await this.#exchangeCode(flow, code);
++      this.#release(flow);
++      return { state: "completed", token };
++    } catch (error) {
++      this.#release(flow);
++      return {
++        state: "failed",
++        error: { code: "token-exchange-failed", message: describeError(error) },
++      };
++    }
++  }
++
++  cancel(flowId?: string): void {
++    const flow = this.#flow;
++    if (!flow || (flowId && flow.flowId !== flowId)) {
++      return;
++    }
++    this.#release(flow);
++  }
++
++  dispose(): void {
++    this.cancel();
++  }
++
++  async #discover(baseUrl: string): Promise<GatewayMetadata> {
++    const discoveryUrl = `${baseUrl}/.well-known/oauth-authorization-server`;
++    let response: Response;
++    try {
++      response = await this.#request(discoveryUrl, { headers: { accept: "application/json" } });
++    } catch (error) {
++      throw new Error(`无法连接网关 ${baseUrl}：${describeError(error)}`);
++    }
++    if (!response.ok) {
++      throw new Error(`网关发现文档不可用（HTTP ${response.status}）`);
++    }
++    let document: unknown;
++    try {
++      document = await response.json();
++    } catch {
++      throw new Error("网关发现文档不是合法 JSON");
++    }
++    return {
++      authorizationEndpoint: readEndpoint(document, "authorization_endpoint"),
++      tokenEndpoint: readEndpoint(document, "token_endpoint"),
++    };
++  }
++
++  async #listen(flowId: string): Promise<{ server: Server; redirectUri: string }> {
++    const server = createServer((request, response) => {
++      this.#handleCallback(flowId, request.url ?? "/", response);
++    });
++    await new Promise<void>((resolve, reject) => {
++      const onError = (error: Error): void => {
++        server.off("listening", onListening);
++        reject(error);
++      };
++      const onListening = (): void => {
++        server.off("error", onError);
++        resolve();
++      };
++      server.once("error", onError);
++      server.once("listening", onListening);
++      server.listen(0, LOOPBACK_HOST);
++    });
++    const address = server.address();
++    if (!address || typeof address === "string") {
++      server.close();
++      throw new Error("回环回调端口绑定失败");
++    }
++    return {
++      server,
++      redirectUri: `http://${LOOPBACK_HOST}:${address.port}${AI_PROXY_OAUTH_CALLBACK_PATH}`,
++    };
++  }
++
++  #handleCallback(flowId: string, rawUrl: string, response: ServerResponse): void {
++    const flow = this.#flow;
++    if (!flow || flow.flowId !== flowId) {
++      response.statusCode = 404;
++      response.end();
++      return;
++    }
++    const url = new URL(rawUrl, `http://${LOOPBACK_HOST}`);
++    if (url.pathname !== AI_PROXY_OAUTH_CALLBACK_PATH) {
++      response.statusCode = 404;
++      response.end();
++      return;
++    }
++    const respond = (ok: boolean, status: number, message: string): void => {
++      response.statusCode = status;
++      response.setHeader("content-type", "text/html; charset=utf-8");
++      response.end(renderCallbackPage({ ok, message }));
++    };
++
++    const denyReason = url.searchParams.get("error");
++    if (url.searchParams.get("state") !== flow.state) {
++      // 回调地址是回环明文 http，任何人都能往里发请求；state 是唯一能证明
++      // "这条回调属于本次登录"的东西，不匹配就整条流程作废。
++      respond(false, 400, "回调 state 与本次登录不匹配，已忽略该回调。");
++      this.#fail(flow, { code: "state-mismatch", message: "回调 state 校验失败" });
++      return;
++    }
++    if (denyReason) {
++      respond(false, 400, "网关没有批准本次授权。");
++      this.#fail(flow, { code: "authorization-denied", message: `网关拒绝了授权：${denyReason}` });
++      return;
++    }
++    const code = url.searchParams.get("code");
++    if (!code) {
++      respond(false, 400, "回调没有携带授权码。");
++      this.#fail(flow, { code: "missing-code", message: "回调没有携带授权码" });
++      return;
++    }
++    flow.code = code;
++    // 端口只服务这一次回调：拿到码就关，不留长期监听。
++    flow.server.close();
++    respond(true, 200, "ZCode 已收到授权码，正在完成登录。");
++  }
++
++  async #exchangeCode(flow: PendingFlow, code: string): Promise<AiProxyOAuthToken> {
++    const body = new URLSearchParams({
++      grant_type: "authorization_code",
++      code,
++      redirect_uri: flow.redirectUri,
++      client_id: AI_PROXY_OAUTH_CLIENT_ID,
++      code_verifier: flow.verifier,
++      access_token_ttl_seconds: String(REQUESTED_ACCESS_TOKEN_TTL_SECONDS),
++    });
++    const response = await this.#request(flow.metadata.tokenEndpoint, {
++      method: "POST",
++      headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
++      body: body.toString(),
++    });
++    const payload: unknown = await response.json().catch(() => null);
++    if (!response.ok) {
++      throw new Error(
++        asTrimmedString(readField(payload, "error_description")) ??
++          asTrimmedString(readField(payload, "error")) ??
++          `令牌端点返回 HTTP ${response.status}`,
++      );
++    }
++    const accessToken = asTrimmedString(readField(payload, "access_token"));
++    if (!accessToken) {
++      throw new Error("网关响应缺少 access_token");
++    }
++    return {
++      baseUrl: flow.baseUrl,
++      accessToken,
++      refreshToken: asTrimmedString(readField(payload, "refresh_token")),
++      expiresInSeconds: asFiniteNumber(readField(payload, "expires_in")),
++      scope: asTrimmedString(readField(payload, "scope")),
++    };
++  }
++
++  #fail(flow: PendingFlow, error: AiProxyOAuthFailure): void {
++    if (flow.failure || flow.code) {
++      return;
++    }
++    flow.failure = error;
++    flow.server.close();
++  }
++
++  #release(flow: PendingFlow): void {
++    if (this.#flow === flow) {
++      this.#flow = null;
++    }
++    clearTimeout(flow.timer);
++    if (flow.server.listening) {
++      flow.server.close();
++    }
++  }
++}
+diff --git a/packages/services/src/oauth/oauth.ts b/packages/services/src/oauth/oauth.ts
+index 3fe9ebd..f5ab64b 100644
+--- a/packages/services/src/oauth/oauth.ts
++++ b/packages/services/src/oauth/oauth.ts
+@@ -8,6 +8,7 @@ import type {
+ } from "@zcode/shared";
+ import { ServiceChannels } from "@zcode/shared";
+ import { createServiceDescriptor } from "../descriptors.js";
++import type { AiProxyOAuthPollResult, AiProxyOAuthStartResponse } from "./aiProxyOAuth.js";
+ 
+ /**
+  * OAuth 认证服务
+@@ -70,6 +71,23 @@ export interface IOAuthService {
+    * @param provider - 可选；不传时取消当前 pending
+    */
+   cancelPending(provider?: OAuthProviderId): Promise<void>;
++
++  /**
++   * 发起 AI Proxy 网关的 OAuth 登录（授权码 + PKCE）。
++   *
++   * 授权服务器是用户自填的网关自己，与智谱账号登录无关：宿主在 127.0.0.1
++   * 上绑一个临时端口回收授权码，调用方只负责用系统浏览器打开 authorizeUrl。
++   */
++  startAiProxyOAuthLogin(baseUrl: string): Promise<AiProxyOAuthStartResponse>;
++
++  /**
++   * 轮询 AI Proxy 网关 OAuth 结果：浏览器还没回调时返回 null，
++   * 回调到达后由宿主兑换令牌并返回结果。
++   */
++  pollAiProxyOAuthLogin(flowId: string): Promise<AiProxyOAuthPollResult | null>;
++
++  /** 取消 AI Proxy 网关 OAuth 登录并释放回环端口。 */
++  cancelAiProxyOAuthLogin(flowId?: string): Promise<void>;
+ }
+ 
+ export const IOAuthService = createServiceDescriptor<IOAuthService>(ServiceChannels.OAuth);
+diff --git a/packages/services/src/oauth/oauthService.ts b/packages/services/src/oauth/oauthService.ts
+index b6de617..dd6e18f 100644
+--- a/packages/services/src/oauth/oauthService.ts
++++ b/packages/services/src/oauth/oauthService.ts
+@@ -26,6 +26,11 @@ import {
+   refreshLegacyBigModelCachedProfile,
+   withProviderProfileSchema,
+ } from "./oauthProfileSchema.js";
++import {
++  AiProxyOAuthFlow,
++  type AiProxyOAuthPollResult,
++  type AiProxyOAuthStartResponse,
++} from "./aiProxyOAuth.js";
+ import { createOAuthProviderAdapters, type OAuthProviderAdapter } from "./providers/index.js";
+ import { OAuthCredentialRepo } from "./repo/oauthCredentialRepo.js";
+ import { createOAuthRuntimeConfig } from "./runtimeConfig.js";
+@@ -129,6 +134,9 @@ export class OAuthService implements IOAuthService {
+   private oauthFlowStartGeneration = 0;
+   private oauthFlowStartProvider: OAuthProviderId | null = null;
+   private oauthSessionGeneration = 0;
++  // AI Proxy 网关登录与智谱账号登录互不干扰：前者只产出 Provider 凭据，
++  // 不改 active provider / 用户档案，所以单独持有一条流程。
++  private readonly aiProxyOAuth: AiProxyOAuthFlow;
+   private sessionMutationQueue: Promise<unknown> = Promise.resolve();
+   private recentlyCompletedPollingState: {
+     generation: number;
+@@ -143,6 +151,11 @@ export class OAuthService implements IOAuthService {
+     this.onProviderLogout = dependencies.onProviderLogout;
+     this.apiClient = dependencies.apiClient;
+     this.env = dependencies.env ?? process.env;
++    // 网关登录也要走宿主网络栈：企业代理、自签 CA 与官方 OAuth 同源。
++    this.aiProxyOAuth = new AiProxyOAuthFlow({
++      request: (input, init) =>
++        dependencies.apiClient ? dependencies.apiClient.request(input, init) : fetch(input, init),
++    });
+ 
+     const adapters =
+       dependencies.adapters ??
+@@ -1099,6 +1112,25 @@ export class OAuthService implements IOAuthService {
+     this.clearPendingState();
+   }
+ 
++  async startAiProxyOAuthLogin(baseUrl: string): Promise<AiProxyOAuthStartResponse> {
++    return this.aiProxyOAuth.start(baseUrl);
++  }
++
++  async pollAiProxyOAuthLogin(flowId: string): Promise<AiProxyOAuthPollResult | null> {
++    if (!flowId.trim()) {
++      throw new Error("flowId 不能为空");
++    }
++    const result = await this.aiProxyOAuth.poll(flowId);
++    if (result?.state === "failed") {
++      serviceLog.warn("AI Proxy OAuth failed", { flowId, reason: result.error.code });
++    }
++    return result;
++  }
++
++  async cancelAiProxyOAuthLogin(flowId?: string): Promise<void> {
++    this.aiProxyOAuth.cancel(flowId);
++  }
++
+   private clearPendingState(): void {
+     if (!this.pendingState) {
+       return;
+diff --git a/packages/shared/src/env.ts b/packages/shared/src/env.ts
+index e2baa3c..d259792 100644
+--- a/packages/shared/src/env.ts
++++ b/packages/shared/src/env.ts
+@@ -8,6 +8,8 @@ export type ArmsRumEnv = "local" | "prod";
+ // 非构建环境（如 e2e 测试的 mocha）下 define 不存在，用 typeof 检查 + fallback 避免 ReferenceError
+ declare const __ZCODE_ENV__: string;
+ declare const __ZCODE_PRODUCT_FLAVOR__: string;
++/** 下游品牌开关（编译期注入）：真时安装包使用本仓库自己的产品名与包名。 */
++declare const __ZCODE_PRODUCT_BRAND__: string;
+ 
+ export function normalizeZCodeEnv(value: string | undefined): ZCodeEnv {
+   return value?.trim().toLowerCase() === "production" ? "production" : "test";
+@@ -37,6 +39,13 @@ export const ZCODE_PRODUCT_FLAVOR = normalizeZCodeProductFlavor(
+   typeof __ZCODE_PRODUCT_FLAVOR__ !== "undefined" ? __ZCODE_PRODUCT_FLAVOR__ : undefined,
+   ZCODE_ENV,
+ );
++/**
++ * 下游品牌：与 flavor 分轴。flavor 决定更新器/签名门/菜单语义，品牌决定用户看到的名字。
++ * 未注入 define 的 bundle（web、CLI、测试）保持上游身份。
++ */
++export const ZCODE_PRODUCT_BRAND =
++  typeof __ZCODE_PRODUCT_BRAND__ !== "undefined" && __ZCODE_PRODUCT_BRAND__.trim() === "1";
++
+ export const ZCODE_APP_VERSION_ENV = "ZCODE_APP_VERSION" as const;
+ export const ZCODE_BUILD_COMMIT_ID_ENV = "ZCODE_BUILD_COMMIT_ID" as const;
+ 
+diff --git a/packages/shared/src/index.ts b/packages/shared/src/index.ts
+index 49b32f1..bdc0342 100644
+--- a/packages/shared/src/index.ts
++++ b/packages/shared/src/index.ts
+@@ -61,6 +61,7 @@ export {
+ } from "./shortcutCommands.js";
+ export {
+   ZCODE_ENV,
++  ZCODE_PRODUCT_BRAND,
+   ZCODE_PRODUCT_FLAVOR,
+   ZCODE_APP_VERSION_ENV,
+   ZCODE_BUILD_COMMIT_ID_ENV,
+diff --git a/packages/shared/src/validationAppSettings.ts b/packages/shared/src/validationAppSettings.ts
+index 3cb58a1..2ac03f1 100644
+--- a/packages/shared/src/validationAppSettings.ts
++++ b/packages/shared/src/validationAppSettings.ts
+@@ -10,6 +10,7 @@ import {
+   embeddedBrowserViewportPreferenceSchema,
+ } from "./browser-use/command-metadata.js";
+ import { providerFamilyConnectionSelectionSettingsSchema } from "./provider-family-connection-selection.js";
++import { ZCODE_PRODUCT_BRAND } from "./env.js";
+ 
+ /** 引导职业枚举；单独导出供 onboarding 记录回填 settings 时做窄化校验。 */
+ const appSettingsOccupationSchema = z.enum([
+@@ -468,7 +469,9 @@ const appSettingsObjectSchema = z.object({
+   dataBaseDir: z.string().trim().min(1).optional(),
+   pendingPostUpdateReleaseNotes: postUpdateReleaseNotesPayloadSchema.optional(),
+   receivePreviewUpdates: z.boolean().default(false),
+-  autoDownloadAndInstallUpdates: z.boolean().default(false),
++  // 下游品牌（ZCode Gateway）的更新源是本仓库自己的 GitHub Releases，整条链路
++  // （启动检查 → 后台下载 → 退出时安装）默认打开；上游构建保持 opt-in 语义。
++  autoDownloadAndInstallUpdates: z.boolean().default(ZCODE_PRODUCT_BRAND),
+   skippedElectronUpdateVersions: skippedElectronUpdateVersionsSchema,
+   settingsSyncFirstRunPromptHandled: z.boolean().optional(),
+   zcodeEndpointOrigin: zcodeEndpointOriginSchema.optional(),
+diff --git a/packages/ui/src/WelcomeScreen.tsx b/packages/ui/src/WelcomeScreen.tsx
+index 69cfe46..a2e5313 100644
+--- a/packages/ui/src/WelcomeScreen.tsx
++++ b/packages/ui/src/WelcomeScreen.tsx
+@@ -21,6 +21,7 @@ import { Button } from "./components/ui/button.js";
+ import { ZCodeAboutLogo } from "@/components/ui/ZCodeAboutLogo.js";
+ import { useOAuth } from "./hooks/useOAuth.js";
+ import { useZCodeIntl } from "./i18n/IntlProvider.js";
++import { LoginAiProxyForm } from "./login/LoginAiProxyForm.js";
+ import { LoginApiKeyForm } from "./login/LoginApiKeyForm.js";
+ import { renderOAuthProviderIcon } from "./lib/oauthProviderIcon.js";
+ import { ThemeHeroVisual } from "./openWorkspacePageThemeHero.js";
+@@ -89,7 +90,7 @@ function LoginPanel({ active, onComplete }: LoginPanelProps) {
+   const loginEntryRequest = useZCodeStore((s) => s.loginEntryRequest);
+   const clearLoginEntryRequest = useZCodeStore((s) => s.clearLoginEntryRequest);
+   const markLoginEntryAttemptStatus = useZCodeStore((s) => s.markLoginEntryAttemptStatus);
+-  const [loginMode, setLoginMode] = useState<"providers" | "apiKey">("providers");
++  const [loginMode, setLoginMode] = useState<"providers" | "apiKey" | "aiProxy">("providers");
+   const wasActiveRef = useRef(active);
+   const consumedLoginRequestRef = useRef<number | null>(null);
+   const observedOAuthSuccessSeqRef = useRef(oauthSuccessSeq);
+@@ -338,6 +339,23 @@ function LoginPanel({ active, onComplete }: LoginPanelProps) {
+                     <LoginOAuthRegionTag providerId={provider.id} />
+                   </Button>
+                 ))}
++                <Button
++                  variant="default"
++                  className="h-10 w-full text-ui-base"
++                  size="lg"
++                  data-testid="oauth-login-button-ai-proxy"
++                  onClick={() => {
++                    setLoginMode("aiProxy");
++                  }}
++                >
++                  {renderOAuthProviderIcon("ai-proxy" as any, "size-4")}
++                  <span className="min-w-0 truncate">
++                    {intl.formatMessage({ id: "login.aiProxy.entry" })}
++                  </span>
++                  <span className="ml-1 inline-flex h-5 shrink-0 items-center rounded-full border border-primary-foreground/30 px-2 text-ui-xs font-medium leading-none text-primary-foreground/60">
++                    {intl.formatMessage({ id: "login.aiProxy.entryHint" })}
++                  </span>
++                </Button>
+                 <Button
+                   variant="outline"
+                   className="h-10 w-full text-ui-base"
+@@ -354,6 +372,20 @@ function LoginPanel({ active, onComplete }: LoginPanelProps) {
+           </div>
+         )}
+ 
++        {status === "idle" && loginMode === "aiProxy" ? (
++          <LoginAiProxyForm
++            onCancel={() => setLoginMode("providers")}
++            onSaved={() => {
++              resetApiKeyForm();
++              return onComplete("apiKey");
++            }}
++            onSkipped={() => {
++              resetApiKeyForm();
++              return onComplete("skip");
++            }}
++          />
++        ) : null}
++
+         {status === "idle" && loginMode === "apiKey" ? (
+           <LoginApiKeyForm
+             onCancel={() => setLoginMode("providers")}
+diff --git a/packages/ui/src/i18n/locales/en-US.ts b/packages/ui/src/i18n/locales/en-US.ts
+index fc33d4d..ee1e71b 100644
+--- a/packages/ui/src/i18n/locales/en-US.ts
++++ b/packages/ui/src/i18n/locales/en-US.ts
+@@ -573,6 +573,21 @@ const enUS: Record<string, string> = {
+   "login.expired.description": "To keep your account secure, please sign in again.",
+   "login.expired.action": "Sign in again",
+   "login.expired.restart": "Confirm and restart",
++  "login.aiProxy.entry": "Sign in with AI Proxy gateway",
++  "login.aiProxy.entryHint": "API Key / OAuth",
++  "login.aiProxy.title": "AI Proxy gateway",
++  "login.aiProxy.tab.apiKey": "API Key",
++  "login.aiProxy.tab.oauth": "OAuth",
++  "login.aiProxy.oauth.title": "OAuth authorization",
++  "login.aiProxy.oauth.description":
++    "Authorize once in your browser. The host exchanges the token and stores it locally, so no key has to be copied by hand.",
++  "login.aiProxy.oauth.baseUrl": "Gateway BaseURL",
++  "login.aiProxy.oauth.hostTimeout":
++    "The host did not respond, so this authorization was interrupted. Please start it again.",
++  "login.aiProxy.oauth.start": "Authorize in browser",
++  "login.aiProxy.oauth.reopen": "Reopen authorization page",
++  "login.aiProxy.oauth.waiting": "Authorization page opened in your browser. Waiting for approval…",
++  "login.aiProxy.oauth.completing": "Authorized. Writing gateway credential…",
+   "login.useApiKey": "Use API key",
+   "login.apiKey.title": "API Key",
+   "login.apiKey.placeholder": "Enter API key",
+@@ -585,6 +600,7 @@ const enUS: Record<string, string> = {
+   "login.apiKey.cancel": "Cancel",
+   "login.apiKey.continue": "Continue",
+   "login.apiKey.emptyError": "Enter an API key.",
++  "login.apiKey.baseUrlRequired": "Enter the gateway BaseURL.",
+   "login.apiKey.providerMissingError":
+     "Built-in provider configuration for {provider} was not found. Please try again later.",
+   "login.apiKey.saveError": "Failed to save API key: {error}",
+@@ -2454,6 +2470,19 @@ const enUS: Record<string, string> = {
+   "settings.modelProvider.apiFormat.title.anthropicMessages": "Anthropic messages",
+   "settings.modelProvider.apiKey": "API key",
+   "settings.modelProvider.apiKeyPlaceholder": "Enter API key",
++  "settings.modelProvider.aiProxyOAuth.title": "OAuth authorization",
++  "settings.modelProvider.aiProxyOAuth.description":
++    "No API key needed: authorize once in your browser. The host writes the gateway token into this provider and syncs its models.",
++  "settings.modelProvider.aiProxyOAuth.start": "Authorize in browser",
++  "settings.modelProvider.aiProxyOAuth.reopen": "Reopen authorization page",
++  "settings.modelProvider.aiProxyOAuth.cancel": "Cancel authorization",
++  "settings.modelProvider.aiProxyOAuth.waiting":
++    "Authorization page opened in your browser. Waiting for approval…",
++  "settings.modelProvider.aiProxyOAuth.completing":
++    "Authorized. Writing credentials and syncing models…",
++  "settings.modelProvider.aiProxyOAuth.writing": "Writing gateway credential…",
++  "settings.modelProvider.aiProxyOAuth.success": "OAuth authorized. Synced {count} models",
++  "settings.modelProvider.aiProxyOAuth.failure": "OAuth authorization failed: {error}",
+   "settings.modelProvider.apiKeyDisabledHint": "Set an API key to enable this provider.",
+   "settings.modelProvider.getApiKey": "Get API key",
+   "settings.modelProvider.viewUsage": "View usage",
+@@ -3049,6 +3078,11 @@ const enUS: Record<string, string> = {
+   "settings.modelProvider.models": "Model list",
+   "settings.modelProvider.modelsEmpty": "No models are configured. Add a model to use it in chat.",
+   "settings.modelProvider.addModel": "Add model",
++  "settings.modelProvider.refreshModels": "Refresh model list",
++  "settings.modelProvider.refreshModelsPending":
++    "Refreshing the model list and its parameters from the gateway…",
++  "settings.modelProvider.refreshModelsSuccess": "Refreshed {count} models and their parameters",
++  "settings.modelProvider.refreshModelsFailure": "Could not refresh the model list: {error}",
+   "settings.modelProvider.modelId": "Model ID",
+   "settings.modelProvider.modelDisplayName": "Display name",
+   "settings.modelProvider.modelApiFormat.anthropic": "Anthropic messages",
+diff --git a/packages/ui/src/i18n/locales/zh-CN.ts b/packages/ui/src/i18n/locales/zh-CN.ts
+index af3bcaf..f932650 100644
+--- a/packages/ui/src/i18n/locales/zh-CN.ts
++++ b/packages/ui/src/i18n/locales/zh-CN.ts
+@@ -521,6 +521,20 @@ const zhCN: Record<string, string> = {
+   "login.expired.description": "为了保障账号安全，请重新登录。",
+   "login.expired.action": "重新登录",
+   "login.expired.restart": "确认并重启",
++  "login.aiProxy.entry": "AI Proxy 网关登录",
++  "login.aiProxy.entryHint": "API Key / OAuth",
++  "login.aiProxy.title": "AI Proxy 网关",
++  "login.aiProxy.tab.apiKey": "API Key",
++  "login.aiProxy.tab.oauth": "OAuth 授权",
++  "login.aiProxy.oauth.title": "OAuth 授权登录",
++  "login.aiProxy.oauth.description":
++    "用浏览器在网关上完成一次授权，令牌由宿主兑换并写入本机，无需手动复制密钥。",
++  "login.aiProxy.oauth.baseUrl": "网关 BaseURL",
++  "login.aiProxy.oauth.hostTimeout": "宿主没有响应，登录流程已中断，请重新发起授权。",
++  "login.aiProxy.oauth.start": "使用浏览器授权登录",
++  "login.aiProxy.oauth.reopen": "重新打开授权页",
++  "login.aiProxy.oauth.waiting": "已在浏览器打开网关授权页，等待授权完成…",
++  "login.aiProxy.oauth.completing": "授权已通过，正在写入网关凭据…",
+   "login.useApiKey": "使用 API key",
+   "login.apiKey.title": "API Key",
+   "login.apiKey.placeholder": "输入 API key",
+@@ -533,6 +547,7 @@ const zhCN: Record<string, string> = {
+   "login.apiKey.cancel": "取消",
+   "login.apiKey.continue": "继续",
+   "login.apiKey.emptyError": "请输入 API key。",
++  "login.apiKey.baseUrlRequired": "请填写网关 BaseURL。",
+   "login.apiKey.providerMissingError": "未找到 {provider} 的内置 provider 配置，请稍后重试。",
+   "login.apiKey.saveError": "保存 API key 失败：{error}",
+   "login.apiKey.skipError": "跳过 API key 设置失败：{error}",
+@@ -2302,6 +2317,17 @@ const zhCN: Record<string, string> = {
+   "settings.modelProvider.apiFormat.title.anthropicMessages": "Anthropic Messages",
+   "settings.modelProvider.apiKey": "API Key",
+   "settings.modelProvider.apiKeyPlaceholder": "输入 API Key",
++  "settings.modelProvider.aiProxyOAuth.title": "OAuth 授权",
++  "settings.modelProvider.aiProxyOAuth.description":
++    "不填 API Key 也可以：在浏览器里完成一次网关授权，令牌由宿主写入该供应商并自动同步模型。",
++  "settings.modelProvider.aiProxyOAuth.start": "使用浏览器授权登录",
++  "settings.modelProvider.aiProxyOAuth.reopen": "重新打开授权页",
++  "settings.modelProvider.aiProxyOAuth.cancel": "取消授权",
++  "settings.modelProvider.aiProxyOAuth.waiting": "已在浏览器打开网关授权页，等待授权完成…",
++  "settings.modelProvider.aiProxyOAuth.completing": "授权已通过，正在写入凭据并同步模型…",
++  "settings.modelProvider.aiProxyOAuth.writing": "正在写入网关凭据…",
++  "settings.modelProvider.aiProxyOAuth.success": "OAuth 授权完成，已同步 {count} 个模型",
++  "settings.modelProvider.aiProxyOAuth.failure": "OAuth 授权失败：{error}",
+   "settings.modelProvider.apiKeyDisabledHint": "设置 API Key 后即可启用。",
+   "settings.modelProvider.getApiKey": "获取 API Key",
+   "settings.modelProvider.viewUsage": "查看用量",
+@@ -2856,6 +2882,10 @@ const zhCN: Record<string, string> = {
+   "settings.modelProvider.models": "模型列表",
+   "settings.modelProvider.modelsEmpty": "当前没有配置模型，添加模型后可在聊天中使用。",
+   "settings.modelProvider.addModel": "添加模型",
++  "settings.modelProvider.refreshModels": "刷新模型列表",
++  "settings.modelProvider.refreshModelsPending": "正在从网关刷新模型列表与参数…",
++  "settings.modelProvider.refreshModelsSuccess": "已刷新 {count} 个模型及其参数",
++  "settings.modelProvider.refreshModelsFailure": "刷新模型列表失败：{error}",
+   "settings.modelProvider.modelId": "模型 ID",
+   "settings.modelProvider.modelDisplayName": "显示名称",
+   "settings.modelProvider.modelApiFormat.anthropic": "Anthropic Messages",
+diff --git a/packages/ui/src/login/LoginAiProxyForm.tsx b/packages/ui/src/login/LoginAiProxyForm.tsx
+new file mode 100644
+index 0000000..936013d
+--- /dev/null
++++ b/packages/ui/src/login/LoginAiProxyForm.tsx
+@@ -0,0 +1,81 @@
++import { useState } from "react";
++import { useZCodeIntl } from "@/i18n/IntlProvider.js";
++import { renderOAuthProviderIcon } from "@/lib/oauthProviderIcon.js";
++import { LoginAiProxyOAuthPanel } from "@/login/LoginAiProxyOAuthPanel.js";
++import { LoginApiKeyForm } from "@/login/LoginApiKeyForm.js";
++
++interface LoginAiProxyFormProps {
++  onCancel: () => void;
++  onSaved: () => void | Promise<void>;
++  onSkipped: () => void | Promise<void>;
++}
++
++type AiProxyLoginMode = "apiKey" | "oauth";
++
++/**
++ * 欢迎页 AI Proxy 网关入口的登录面板：一个入口，两种接入方式。
++ *
++ * API Key 与 OAuth 授权最终都落成同一种 Provider 凭据（网关的 Bearer 令牌），
++ * 差别只在令牌从哪来：用户自己粘贴，还是浏览器授权后由宿主兑换。
++ */
++export function LoginAiProxyForm({ onCancel, onSaved, onSkipped }: LoginAiProxyFormProps) {
++  const { intl } = useZCodeIntl();
++  // 网关接入默认走 OAuth：浏览器授权一次即可，不用先找管理员要静态密钥。
++  // 需要贴 aps_ 密钥的用户切到 API Key 选项卡即可，两条路径写的是同一份凭据。
++  const [mode, setMode] = useState<AiProxyLoginMode>("oauth");
++
++  const tabs: ReadonlyArray<{ id: AiProxyLoginMode; labelId: string }> = [
++    { id: "oauth", labelId: "login.aiProxy.tab.oauth" },
++    { id: "apiKey", labelId: "login.aiProxy.tab.apiKey" },
++  ];
++
++  return (
++    <div className="space-y-4">
++      <div className="flex items-center gap-2">
++        {renderOAuthProviderIcon("ai-proxy" as any, "size-5")}
++        <h2 className="text-ui-base font-medium text-foreground">
++          {intl.formatMessage({ id: "login.aiProxy.title" })}
++        </h2>
++      </div>
++
++      <div
++        role="tablist"
++        aria-label={intl.formatMessage({ id: "login.aiProxy.title" })}
++        className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-surface p-1"
++      >
++        {tabs.map((tab) => {
++          const selected = tab.id === mode;
++          return (
++            <button
++              key={tab.id}
++              type="button"
++              role="tab"
++              aria-selected={selected}
++              data-testid={`login-ai-proxy-tab-${tab.id}`}
++              className={`h-8 rounded-md text-ui-sm transition-colors ${
++                selected
++                  ? "bg-background text-foreground shadow-sm"
++                  : "text-foreground-subtle hover:text-foreground"
++              }`}
++              onClick={() => setMode(tab.id)}
++            >
++              {intl.formatMessage({ id: tab.labelId })}
++            </button>
++          );
++        })}
++      </div>
++
++      {mode === "apiKey" ? (
++        <LoginApiKeyForm
++          lockedProviderChoice="ai-proxy"
++          hideTitle
++          onCancel={onCancel}
++          onSaved={onSaved}
++          onSkipped={onSkipped}
++        />
++      ) : (
++        <LoginAiProxyOAuthPanel onCancel={onCancel} onSaved={onSaved} />
++      )}
++    </div>
++  );
++}
+diff --git a/packages/ui/src/login/LoginAiProxyOAuthPanel.tsx b/packages/ui/src/login/LoginAiProxyOAuthPanel.tsx
+new file mode 100644
+index 0000000..1a65f6b
+--- /dev/null
++++ b/packages/ui/src/login/LoginAiProxyOAuthPanel.tsx
+@@ -0,0 +1,164 @@
++import { useCallback, useState } from "react";
++import { BUILTIN_PROVIDER_TEMPLATE_IDS } from "@zcode/shared";
++import type { AiProxyOAuthToken } from "@zcode/services";
++import { Loader2Icon, TriangleAlertIcon } from "lucide-react";
++import { Alert, AlertDescription } from "@/components/ui/alert.js";
++import { Button } from "@/components/ui/button.js";
++import { Input } from "@/components/ui/input.js";
++import { useServices } from "@/hooks/useServices.js";
++import { useZCodeIntl } from "@/i18n/IntlProvider.js";
++import { logger } from "@/logger.js";
++import { encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
++import { renderOAuthProviderIcon } from "@/lib/oauthProviderIcon.js";
++import { buildLoginApiKeyDefaultModelPreferenceFromSelection } from "@/login/LoginApiKeyForm.helpers.js";
++import {
++  AI_PROXY_GATEWAY_BASE_URL_PLACEHOLDER,
++  useAiProxyOAuthFlow,
++} from "@/login/useAiProxyOAuthFlow.js";
++import { useZCodeStore } from "@/store/StoreProvider.js";
++
++interface LoginAiProxyOAuthPanelProps {
++  onCancel: () => void;
++  onSaved: () => void | Promise<void>;
++}
++
++function buildApiBaseUrl(baseUrl: string): string {
++  return `${baseUrl.replace(/\/+$/, "")}/v1`;
++}
++
++/**
++ * AI Proxy 网关 OAuth 登录面板：宿主侧走授权码 + PKCE 并监听回环回调，
++ * 这里只负责打开浏览器、轮询结果，以及把拿到的令牌落成 Provider 凭据。
++ */
++export function LoginAiProxyOAuthPanel({ onCancel, onSaved }: LoginAiProxyOAuthPanelProps) {
++  const { intl } = useZCodeIntl();
++  const { modelSelectionService, providerSettingsService } = useServices();
++  const markApiKeyLoginSuccess = useZCodeStore((state) => state.markApiKeyLoginSuccess);
++  // 网关地址由用户自己填：不同部署的网关地址不同，预填任何一个都会把人带到别人的网关上。
++  const [baseUrl, setBaseUrl] = useState("");
++
++  const finishLogin = useCallback(
++    async (token: AiProxyOAuthToken) => {
++      const created = await providerSettingsService.createPersonalProvider({
++        templateId: BUILTIN_PROVIDER_TEMPLATE_IDS.aiProxy,
++        // 网关签发的令牌就是 Bearer 凭据，写进与 API Key 同一个字段；
++        // access 类型沿用 api-key，避免在 Provider Schema 里新增只服务网关的枚举。
++        initialConfig: {
++          access: { type: "api-key", apiKey: token.accessToken },
++          api: { type: "openai-chat-completions", baseUrl: buildApiBaseUrl(token.baseUrl) },
++        } as any,
++      });
++      // 登录成功即把网关当前的模型目录与参数落到本地：默认模型取目录里的第一个，
++      // 网关顺序就是它自己的优先级。同步失败时退回内置模板给出的默认值，登录本身不失败。
++      let defaultModelPreference: string | null = null;
++      try {
++        const synced = await providerSettingsService.syncAiProxyModels(created.providerId);
++        const firstModelId = synced.modelIds[0];
++        defaultModelPreference = firstModelId
++          ? encodeCustomModelValue(created.providerId, firstModelId)
++          : null;
++      } catch (syncError) {
++        logger.warn("[LoginAiProxy] 同步网关模型目录失败", { syncError });
++      }
++      if (!defaultModelPreference) {
++        defaultModelPreference = buildLoginApiKeyDefaultModelPreferenceFromSelection(
++          await modelSelectionService.getView(),
++          created.providerId,
++        );
++      }
++      markApiKeyLoginSuccess(defaultModelPreference);
++      await onSaved();
++    },
++    [markApiKeyLoginSuccess, modelSelectionService, onSaved, providerSettingsService],
++  );
++
++  const flow = useAiProxyOAuthFlow({ onToken: finishLogin, logScope: "LoginAiProxy" });
++  const busy = flow.busy;
++  const waiting = flow.status === "waiting";
++
++  return (
++    <div className="space-y-4">
++      <div className="flex items-center gap-2">
++        {renderOAuthProviderIcon("ai-proxy" as any, "size-4")}
++        <h2 className="text-ui-base font-medium text-foreground">
++          {intl.formatMessage({ id: "login.aiProxy.oauth.title" })}
++        </h2>
++      </div>
++      <p className="text-ui-sm text-foreground-subtle">
++        {intl.formatMessage({ id: "login.aiProxy.oauth.description" })}
++      </p>
++
++      <div className="space-y-1.5">
++        <label className="text-ui-xs text-muted-foreground" htmlFor="login-ai-proxy-oauth-base-url">
++          {intl.formatMessage({ id: "login.aiProxy.oauth.baseUrl" })}
++        </label>
++        <Input
++          id="login-ai-proxy-oauth-base-url"
++          type="text"
++          size="lg"
++          className="h-10 w-full text-ui-base"
++          value={baseUrl}
++          placeholder={AI_PROXY_GATEWAY_BASE_URL_PLACEHOLDER}
++          disabled={busy || waiting}
++          onChange={(event) => {
++            setBaseUrl(event.target.value);
++            flow.clearError();
++          }}
++        />
++      </div>
++
++      {waiting ? (
++        <div className="flex items-center gap-2 rounded-lg border border-border bg-surface p-3 text-ui-sm text-foreground-subtle">
++          <Loader2Icon className="size-4 shrink-0 animate-spin" />
++          {intl.formatMessage({ id: "login.aiProxy.oauth.waiting" })}
++        </div>
++      ) : null}
++
++      {flow.status === "completing" ? (
++        <div className="flex items-center gap-2 rounded-lg border border-border bg-surface p-3 text-ui-sm text-foreground-subtle">
++          <Loader2Icon className="size-4 shrink-0 animate-spin" />
++          {intl.formatMessage({ id: "login.aiProxy.oauth.completing" })}
++        </div>
++      ) : null}
++
++      {flow.errorMessage ? (
++        <Alert variant="destructive">
++          <TriangleAlertIcon className="size-4" />
++          <AlertDescription>{flow.errorMessage}</AlertDescription>
++        </Alert>
++      ) : null}
++
++      <div className="space-y-2">
++        <Button
++          type="button"
++          className="h-10 w-full text-ui-base"
++          size="lg"
++          data-testid="login-ai-proxy-oauth-start"
++          disabled={busy || !baseUrl.trim()}
++          onClick={() => {
++            void flow.start(baseUrl);
++          }}
++        >
++          {busy ? <Loader2Icon className="size-4 animate-spin" /> : null}
++          {intl.formatMessage({
++            id: waiting ? "login.aiProxy.oauth.reopen" : "login.aiProxy.oauth.start",
++          })}
++        </Button>
++        <Button
++          type="button"
++          variant="outline"
++          className="h-10 w-full text-ui-base"
++          size="lg"
++          disabled={busy}
++          onClick={() => {
++            void flow.cancel().then(() => {
++              onCancel();
++            });
++          }}
++        >
++          {intl.formatMessage({ id: "login.apiKey.cancel" })}
++        </Button>
++      </div>
++    </div>
++  );
++}
+diff --git a/packages/ui/src/login/LoginApiKeyForm.tsx b/packages/ui/src/login/LoginApiKeyForm.tsx
+index 51fb53b..2a51c97 100644
+--- a/packages/ui/src/login/LoginApiKeyForm.tsx
++++ b/packages/ui/src/login/LoginApiKeyForm.tsx
+@@ -24,6 +24,7 @@ import {
+   SelectValue,
+ } from "@/components/ui/select.js";
+ import { usePlatform } from "@/hooks/usePlatform.js";
++import { encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
+ import { useProviderSettingsView } from "@/hooks/useProviderSettingsView.js";
+ import { useServices } from "@/hooks/useServices.js";
+ import { useZCodeIntl } from "@/i18n/IntlProvider.js";
+@@ -41,20 +42,34 @@ import {
+ import { useZCodeStore } from "@/store/StoreProvider.js";
+ 
+ interface LoginApiKeyFormProps {
++  /**
++   * 锁定供应商：此时不渲染选择器，只显示当前供应商身份。
++   * 网关登录这类"入口即确定供应商"的场景不该让用户顺手切到智谱官方。
++   */
++  lockedProviderChoice?: ApiKeyProviderChoice;
++  /** 外层已经用 tab/标题说明当前方式时，隐藏表单自带的 "API Key" 标题。 */
++  hideTitle?: boolean;
+   onCancel: () => void;
+   onSaved: () => void | Promise<void>;
+   onSkipped: () => void | Promise<void>;
+ }
+ 
+-export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFormProps) {
++export function LoginApiKeyForm({
++  lockedProviderChoice,
++  hideTitle,
++  onCancel,
++  onSaved,
++  onSkipped,
++}: LoginApiKeyFormProps) {
+   const { intl, locale } = useZCodeIntl();
+   const platform = usePlatform();
+   const { modelSelectionService, providerSettingsService, settingService } = useServices();
+   const markApiKeyLoginSuccess = useZCodeStore((state) => state.markApiKeyLoginSuccess);
+-  const [providerChoice, setProviderChoice] = useState<ApiKeyProviderChoice>(() =>
+-    resolveLoginApiKeyDefaultProvider(locale),
++  const [providerChoice, setProviderChoice] = useState<ApiKeyProviderChoice>(
++    () => lockedProviderChoice ?? resolveLoginApiKeyDefaultProvider(locale),
+   );
+-  const [baseUrlValue, setBaseUrlValue] = useState("https://aps.veildawn.com/v1");
++  // 网关地址不预填：用户填哪个就接哪个，避免默认值把请求发到别人的网关。
++  const [baseUrlValue, setBaseUrlValue] = useState("");
+   const [apiKeyValue, setApiKeyValue] = useState("");
+   const [saving, setSaving] = useState(false);
+   const [skipping, setSkipping] = useState(false);
+@@ -63,6 +78,26 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
+   const providerSettingsView =
+     providerSettingsRead.state.status === "ready" ? providerSettingsRead.state.view : null;
+ 
++  // 网关 Provider 的模型列表来自网关自己：登录成功后先同步目录，默认模型取同步结果
++  // 的第一个模型（网关顺序即优先级），同步失败才退回内置模板给出的默认值。
++  const resolveLoginDefaultModelPreference = async (providerId: string): Promise<string | null> => {
++    if (providerChoice === "ai-proxy") {
++      try {
++        const synced = await providerSettingsService.syncAiProxyModels(providerId);
++        const firstModelId = synced.modelIds[0];
++        if (firstModelId) {
++          return encodeCustomModelValue(providerId, firstModelId);
++        }
++      } catch (syncError) {
++        logger.warn("[LoginEntry] 同步 AI Proxy 网关模型目录失败", { syncError });
++      }
++    }
++    return buildLoginApiKeyDefaultModelPreferenceFromSelection(
++      await modelSelectionService.getView(),
++      providerId,
++    );
++  };
++
+   const providerLabel = resolveLoginApiKeyProviderLabel(providerChoice);
+   const templateId = resolveLoginApiKeyTemplateId(providerChoice);
+   const templateAccess = providerSettingsView?.providerTemplates.find(
+@@ -100,7 +135,8 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
+         try {
+           const parsed = new URL(normalizedBaseUrl);
+           if (
+-            (parsed.hostname === "aps.veildawn.com" || parsed.hostname.endsWith(".aps.veildawn.com")) &&
++            (parsed.hostname === "aps.veildawn.com" ||
++              parsed.hostname.endsWith(".aps.veildawn.com")) &&
+             (parsed.pathname === "" || parsed.pathname === "/")
+           ) {
+             normalizedBaseUrl = `${parsed.protocol}//${parsed.host}/v1`;
+@@ -117,9 +153,13 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
+         access: { type: template.config.access.type, apiKey },
+       };
+       if (providerChoice === "ai-proxy") {
++        if (!normalizedBaseUrl) {
++          setError(intl.formatMessage({ id: "login.apiKey.baseUrlRequired" }));
++          return;
++        }
+         initialConfig.api = {
+           type: "openai-chat-completions",
+-          baseUrl: normalizedBaseUrl || "https://aps.veildawn.com/v1",
++          baseUrl: normalizedBaseUrl,
+         };
+       }
+ 
+@@ -127,10 +167,7 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
+         templateId,
+         initialConfig: initialConfig as any,
+       });
+-      const defaultModelPreference = buildLoginApiKeyDefaultModelPreferenceFromSelection(
+-        await modelSelectionService.getView(),
+-        created.providerId,
+-      );
++      const defaultModelPreference = await resolveLoginDefaultModelPreference(created.providerId);
+       markApiKeyLoginSuccess(defaultModelPreference);
+       await onSaved();
+     } catch (saveError) {
+@@ -182,59 +219,68 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
+   return (
+     <div className="space-y-4">
+       <div className="space-y-2">
+-        <h2 className="text-ui-base font-medium text-foreground">
+-          {intl.formatMessage({ id: "login.apiKey.title" })}
+-        </h2>
++        {hideTitle ? null : (
++          <h2 className="text-ui-base font-medium text-foreground">
++            {intl.formatMessage({ id: "login.apiKey.title" })}
++          </h2>
++        )}
+         <div className="space-y-2">
+-          <div>
+-            <Select
+-              value={providerChoice}
+-              onValueChange={(value) => setProviderChoice(value as ApiKeyProviderChoice)}
+-              disabled={busy}
+-            >
+-              <SelectTrigger
+-                id="login-api-key-provider"
+-                size="lg"
+-                className="h-10 w-full text-ui-base"
+-                data-testid={TID_LOGIN_API_KEY_PROVIDER_TRIGGER}
+-                aria-label={intl.formatMessage({
+-                  id: "login.apiKey.providerLabel",
+-                })}
++          {lockedProviderChoice ? (
++            <div className="flex h-10 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-ui-base">
++              {renderOAuthProviderIcon(providerChoice as any, "size-4")}
++              <span className="min-w-0 truncate">{providerLabel}</span>
++            </div>
++          ) : (
++            <div>
++              <Select
++                value={providerChoice}
++                onValueChange={(value) => setProviderChoice(value as ApiKeyProviderChoice)}
++                disabled={busy}
+               >
+-                <SelectValue />
+-              </SelectTrigger>
+-              <SelectContent align="end" className="rounded-lg">
+-                <SelectItem
+-                  value="zai"
+-                  className="rounded-md"
+-                  data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "zai")}
+-                >
+-                  {renderOAuthProviderIcon(ZAI_PROVIDER_ID, "size-4")}
+-                  {intl.formatMessage({ id: "login.apiKey.provider.zai" })}
+-                </SelectItem>
+-                <SelectItem
+-                  value="bigmodel"
+-                  className="rounded-md"
+-                  data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "bigmodel")}
+-                >
+-                  {renderOAuthProviderIcon(BIGMODEL_PROVIDER_ID, "size-4")}
+-                  {intl.formatMessage({
+-                    id: "login.apiKey.provider.bigmodel",
++                <SelectTrigger
++                  id="login-api-key-provider"
++                  size="lg"
++                  className="h-10 w-full text-ui-base"
++                  data-testid={TID_LOGIN_API_KEY_PROVIDER_TRIGGER}
++                  aria-label={intl.formatMessage({
++                    id: "login.apiKey.providerLabel",
+                   })}
+-                </SelectItem>
+-                <SelectItem
+-                  value="ai-proxy"
+-                  className="rounded-md"
+-                  data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "ai-proxy")}
+                 >
+-                  {renderOAuthProviderIcon("ai-proxy" as any, "size-4")}
+-                  {intl.formatMessage({
+-                    id: "login.apiKey.provider.aiProxy",
+-                  })}
+-                </SelectItem>
+-              </SelectContent>
+-            </Select>
+-          </div>
++                  <SelectValue />
++                </SelectTrigger>
++                <SelectContent align="end" className="rounded-lg">
++                  <SelectItem
++                    value="zai"
++                    className="rounded-md"
++                    data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "zai")}
++                  >
++                    {renderOAuthProviderIcon(ZAI_PROVIDER_ID, "size-4")}
++                    {intl.formatMessage({ id: "login.apiKey.provider.zai" })}
++                  </SelectItem>
++                  <SelectItem
++                    value="bigmodel"
++                    className="rounded-md"
++                    data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "bigmodel")}
++                  >
++                    {renderOAuthProviderIcon(BIGMODEL_PROVIDER_ID, "size-4")}
++                    {intl.formatMessage({
++                      id: "login.apiKey.provider.bigmodel",
++                    })}
++                  </SelectItem>
++                  <SelectItem
++                    value="ai-proxy"
++                    className="rounded-md"
++                    data-testid={testId(TID_LOGIN_API_KEY_PROVIDER_ITEM, "ai-proxy")}
++                  >
++                    {renderOAuthProviderIcon("ai-proxy" as any, "size-4")}
++                    {intl.formatMessage({
++                      id: "login.apiKey.provider.aiProxy",
++                    })}
++                  </SelectItem>
++                </SelectContent>
++              </Select>
++            </div>
++          )}
+           {providerChoice === "ai-proxy" && (
+             <div className="space-y-1.5">
+               <label className="text-ui-xs text-muted-foreground">
+@@ -243,7 +289,7 @@ export function LoginApiKeyForm({ onCancel, onSaved, onSkipped }: LoginApiKeyFor
+               <Input
+                 value={baseUrlValue}
+                 onChange={(e) => setBaseUrlValue(e.target.value)}
+-                placeholder="https://aps.veildawn.com/v1"
++                placeholder="https://gateway.example.com/v1"
+                 disabled={busy}
+                 className="h-10 text-ui-base"
+               />
+diff --git a/packages/ui/src/login/useAiProxyOAuthFlow.ts b/packages/ui/src/login/useAiProxyOAuthFlow.ts
+new file mode 100644
+index 0000000..85373ce
+--- /dev/null
++++ b/packages/ui/src/login/useAiProxyOAuthFlow.ts
+@@ -0,0 +1,200 @@
++import { useCallback, useEffect, useRef, useState } from "react";
++import type { AiProxyOAuthToken } from "@zcode/services";
++import { usePlatform } from "@/hooks/usePlatform.js";
++import { useServices } from "@/hooks/useServices.js";
++import { useZCodeIntl } from "@/i18n/IntlProvider.js";
++import { logger } from "@/logger.js";
++
++/** 网关地址示例，仅用于输入框 placeholder；不作为任何默认值预填。 */
++export const AI_PROXY_GATEWAY_BASE_URL_PLACEHOLDER = "https://gateway.example.com";
++/** 轮询间隔：网关的同意页是人在点，秒级足够，也不至于让回调后多等。 */
++const POLL_INTERVAL_MS = 1_200;
++/**
++ * 宿主 RPC 的等待上限。宿主进程被杀（例如 dev 下 stdout 管道断开导致 EPIPE）时，
++ * 这些调用不会 reject，只会永远挂着；没有这个上限，用户看到的就是"点了没反应"。
++ */
++const HOST_CALL_TIMEOUT_MS = 15_000;
++
++export type AiProxyOAuthFlowStatus = "idle" | "starting" | "waiting" | "completing" | "error";
++
++export interface AiProxyOAuthFlowController {
++  readonly status: AiProxyOAuthFlowStatus;
++  readonly errorMessage: string | null;
++  /** 已发出请求、浏览器还没回来。 */
++  readonly busy: boolean;
++  /** 发起授权；等待期间调用等价于重新打开授权页。 */
++  start(baseUrl: string): Promise<void>;
++  /** 释放回环端口并回到 idle。 */
++  cancel(): Promise<void>;
++  clearError(): void;
++}
++
++/**
++ * AI Proxy 网关 OAuth 的客户端状态机：发起授权 → 打开浏览器 → 轮询宿主结果 → 交出令牌。
++ *
++ * 授权码与令牌都在宿主进程落地，这里只驱动 UI 状态，因此登录页的「OAuth 授权」
++ * tab 和设置页供应商卡片上的 OAuth 按钮可以共用同一份流程与取消语义。
++ */
++export function useAiProxyOAuthFlow(options: {
++  /** 拿到令牌之后要做的事（建 Provider / 写 Provider / 同步模型）。抛错回到 error 态。 */
++  onToken: (token: AiProxyOAuthToken) => void | Promise<void>;
++  /** 日志前缀，便于区分是登录入口还是设置页触发的。 */
++  logScope: string;
++}): AiProxyOAuthFlowController {
++  const { oauthService } = useServices();
++  const platform = usePlatform();
++  const { intl } = useZCodeIntl();
++  const [status, setStatus] = useState<AiProxyOAuthFlowStatus>("idle");
++  const [errorMessage, setErrorMessage] = useState<string | null>(null);
++  const flowIdRef = useRef<string | null>(null);
++  const authorizeUrlRef = useRef<string | null>(null);
++  const onTokenRef = useRef(options.onToken);
++  onTokenRef.current = options.onToken;
++  const logScope = options.logScope;
++  const hostTimeoutMessage = intl.formatMessage({ id: "login.aiProxy.oauth.hostTimeout" });
++
++  /** 给宿主 RPC 加等待上限：宿主不在了也要把"没反应"变成一条明确的失败。 */
++  const callHost = useCallback(
++    <T>(operation: Promise<T>): Promise<T> =>
++      Promise.race([
++        operation,
++        new Promise<never>((_, reject) => {
++          const timer = setTimeout(
++            () => reject(new Error(hostTimeoutMessage)),
++            HOST_CALL_TIMEOUT_MS,
++          );
++          void operation.finally(() => clearTimeout(timer)).catch(() => undefined);
++        }),
++      ]),
++    [hostTimeoutMessage],
++  );
++
++  const releaseFlow = useCallback(async () => {
++    const flowId = flowIdRef.current;
++    flowIdRef.current = null;
++    authorizeUrlRef.current = null;
++    if (flowId) {
++      await oauthService.cancelAiProxyOAuthLogin(flowId);
++    }
++  }, [oauthService]);
++
++  const start = useCallback(
++    async (baseUrl: string) => {
++      // 等待期间重新点击只是把授权页再拿到前台：新起一条流程会让上一轮的 state
++      // 被用在下一轮的回调上，两边都失败。
++      if (flowIdRef.current && authorizeUrlRef.current) {
++        platform.openExternal(authorizeUrlRef.current);
++        return;
++      }
++      setStatus("starting");
++      setErrorMessage(null);
++      try {
++        const started = await callHost(oauthService.startAiProxyOAuthLogin(baseUrl));
++        flowIdRef.current = started.flowId;
++        authorizeUrlRef.current = started.authorizeUrl;
++        setStatus("waiting");
++        platform.openExternal(started.authorizeUrl);
++      } catch (error) {
++        logger.error(`[${logScope}] 发起网关 OAuth 失败`, { error });
++        setStatus("error");
++        setErrorMessage(error instanceof Error ? error.message : String(error));
++      }
++    },
++    [callHost, logScope, oauthService, platform],
++  );
++
++  const cancel = useCallback(async () => {
++    await releaseFlow();
++    setStatus("idle");
++    setErrorMessage(null);
++  }, [releaseFlow]);
++
++  const clearError = useCallback(() => {
++    setErrorMessage(null);
++    setStatus((current) => (current === "error" ? "idle" : current));
++  }, []);
++
++  // 组件卸载（离开登录页 / 切走供应商）时必须收回环端口，否则它会一直监听到超时。
++  useEffect(() => {
++    return () => {
++      const flowId = flowIdRef.current;
++      flowIdRef.current = null;
++      authorizeUrlRef.current = null;
++      if (flowId) {
++        void oauthService.cancelAiProxyOAuthLogin(flowId);
++      }
++    };
++  }, [oauthService]);
++
++  useEffect(() => {
++    if (status !== "waiting") {
++      return;
++    }
++    const flowId = flowIdRef.current;
++    if (!flowId) {
++      return;
++    }
++    let cancelled = false;
++    let timer: ReturnType<typeof setTimeout> | undefined;
++    const poll = async (): Promise<void> => {
++      try {
++        const result = await callHost(oauthService.pollAiProxyOAuthLogin(flowId));
++        if (cancelled) {
++          return;
++        }
++        if (!result) {
++          timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
++          return;
++        }
++        flowIdRef.current = null;
++        authorizeUrlRef.current = null;
++        if (result.state === "failed") {
++          setStatus("error");
++          setErrorMessage(result.error.message);
++          return;
++        }
++        setStatus("completing");
++        try {
++          await onTokenRef.current(result.token);
++          setStatus("idle");
++        } catch (error) {
++          logger.error(`[${logScope}] 处理网关 OAuth 令牌失败`, { error });
++          setStatus("error");
++          setErrorMessage(error instanceof Error ? error.message : String(error));
++        }
++      } catch (error) {
++        if (cancelled) {
++          return;
++        }
++        logger.error(`[${logScope}] 轮询网关 OAuth 失败`, { error });
++        setStatus("error");
++        setErrorMessage(error instanceof Error ? error.message : String(error));
++      }
++    };
++    timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
++    return () => {
++      cancelled = true;
++      if (timer) {
++        clearTimeout(timer);
++      }
++    };
++  }, [callHost, logScope, oauthService, status]);
++
++  return {
++    status,
++    errorMessage,
++    busy: status === "starting" || status === "completing",
++    start,
++    cancel,
++    clearError,
++  };
++}
++
++/**
++ * 把 Provider 的 API BaseURL（`…/v1`）还原成授权服务器地址（站点根）。
++ * 授权服务器挂在站点根：带 `/v1` 去发现文档只会 404。
++ */
++export function resolveAiProxyGatewayBaseUrl(apiBaseUrl: string): string {
++  // 空值不回落默认网关：授权必须打在用户自己填的那个网关上。
++  return apiBaseUrl.trim().replace(/\/+$/, "").replace(/\/v1$/i, "");
++}
+diff --git a/packages/ui/src/settings/model-provider-section/InlineEditableProviderCard.tsx b/packages/ui/src/settings/model-provider-section/InlineEditableProviderCard.tsx
+index db2e5dd..0e86d84 100644
+--- a/packages/ui/src/settings/model-provider-section/InlineEditableProviderCard.tsx
++++ b/packages/ui/src/settings/model-provider-section/InlineEditableProviderCard.tsx
+@@ -7,16 +7,21 @@ import {
+   type ProviderSettingsFormModel,
+ } from "@/lib/providerSettingsFormTypes.js";
+ import type { ModelConnectivityResult } from "@zcode/shared";
++import { BUILTIN_PROVIDER_TEMPLATE_IDS } from "@zcode/shared";
++import type { AiProxyOAuthToken } from "@zcode/services";
+ import {
+   isApiKeyAccess,
+   type ProviderApiType,
+   type SavePersonalModelDraftInput,
+ } from "@zcode/provider";
+ import { logger } from "@/logger.js";
++import { useServices } from "@/hooks/useServices.js";
+ import { useZCodeIntl } from "@/i18n/IntlProvider.js";
+ import { Switch } from "@/components/ui/switch.js";
+ import { ControlHintTooltip } from "@/ControlHintTooltip.js";
+ import { isImeComposingKeyEvent } from "@/lib/imeComposition.js";
++import { resolveAiProxyGatewayBaseUrl, useAiProxyOAuthFlow } from "@/login/useAiProxyOAuthFlow.js";
++import { ProviderAiProxyOAuthSection } from "./ProviderAiProxyOAuthSection.js";
+ import { resolvePendingProviderDraftSave, type ProviderDraftValues } from "./ProviderDraftSave.js";
+ import {
+   ProviderApiKeySection,
+@@ -182,6 +187,7 @@ export function InlineEditableProviderCard({
+   settingsRevision?: number;
+ }) {
+   const { intl } = useZCodeIntl();
++  const { providerSettingsService } = useServices();
+   const { dismissFeedback, showFeedback } = useProviderDetailFeedback();
+   const [editingName, setEditingName] = useState(false);
+   const [nameValue, setNameValue] = useState(getProviderFormLabel(provider));
+@@ -400,6 +406,141 @@ export function InlineEditableProviderCard({
+     [onSave, provider.providerId, runSaveOperation],
+   );
+ 
++  // 网关供应商的 OAuth 入口：与欢迎页的「OAuth 授权」共用宿主流程，
++  // 结果写进当前卡片正在编辑的这份 Personal Overlay（access.apiKey + 需要的 api 叶子）。
++  const isAiProxyProvider =
++    provider.templateId === BUILTIN_PROVIDER_TEMPLATE_IDS.aiProxy ||
++    provider.providerId.startsWith("ai-proxy");
++
++  const handleAiProxyOAuthToken = useCallback(
++    async (token: AiProxyOAuthToken) => {
++      const notification = saveNotificationRef.current;
++      const feedbackKey = `ai-proxy-oauth:${provider.providerId}`;
++      notification.showFeedback({
++        key: feedbackKey,
++        message: notification.formatMessage({
++          id: "settings.modelProvider.aiProxyOAuth.writing",
++        }),
++        state: "pending",
++        durationMs: 0,
++      });
++      const configuredBaseUrl = draftRef.current.baseUrlValue.trim();
++      const nextApiBaseUrl =
++        configuredBaseUrl || `${resolveAiProxyGatewayBaseUrl(configuredBaseUrl)}/v1`;
++      const nextProvider: ProviderSettingsFormProvider = {
++        ...provider,
++        config: {
++          ...provider.config,
++          access: { type: "api-key", apiKey: token.accessToken },
++          api: { ...provider.config.api, type: "openai-chat-completions", baseUrl: nextApiBaseUrl },
++        },
++        personalConfig: {
++          ...provider.personalConfig,
++          access: {
++            ...provider.personalConfig.access,
++            type: "api-key",
++            apiKey: token.accessToken,
++          },
++          api: {
++            ...provider.personalConfig.api,
++            type: "openai-chat-completions",
++            baseUrl: nextApiBaseUrl,
++          },
++        },
++      };
++      try {
++        // 令牌写入和模型同步都要走完才算授权成功；中间失败由上层反馈承担。
++        selfSaveRequestedRef.current = true;
++        await onSave(nextProvider);
++        // 本地草稿跟随权威值：否则下一次 blur 会用旧 Key 把刚写入的令牌覆盖回去。
++        draftRef.current.apiKeyValue = token.accessToken;
++        draftRef.current.baseUrlValue = nextApiBaseUrl;
++        draftRef.current.apiFormat = "openai-chat-completions";
++        dirtyProviderFieldsRef.current.delete("apiKeyValue");
++        dirtyProviderFieldsRef.current.delete("baseUrlValue");
++        dirtyProviderFieldsRef.current.delete("apiFormat");
++        setApiKeyValue(token.accessToken);
++        setBaseUrlValue(nextApiBaseUrl);
++        const synced = await providerSettingsService.syncAiProxyModels(provider.providerId);
++        notification.showFeedback({
++          key: feedbackKey,
++          message: notification.formatMessage(
++            { id: "settings.modelProvider.aiProxyOAuth.success" },
++            { count: synced.modelIds.length },
++          ),
++          state: "success",
++        });
++      } catch (error) {
++        selfSaveRequestedRef.current = false;
++        notification.showFeedback({
++          key: feedbackKey,
++          message: notification.formatMessage(
++            { id: "settings.modelProvider.aiProxyOAuth.failure" },
++            { error: error instanceof Error ? error.message : String(error) },
++          ),
++          state: "failure",
++          durationMs: 8_000,
++          dismissible: true,
++          dismissLabel: notification.formatMessage({ id: "common.close" }),
++        });
++        throw error;
++      }
++    },
++    [onSave, provider, providerSettingsService],
++  );
++
++  const aiProxyOAuth = useAiProxyOAuthFlow({
++    onToken: handleAiProxyOAuthToken,
++    logScope: "ModelProviderSection",
++  });
++
++  const [refreshingModels, setRefreshingModels] = useState(false);
++
++  // 「刷新模型列表」：把网关当下的目录与参数整体重写一遍（成员、顺序、上下文窗口、
++  // 输入模态、思考档位、输出上限），比逐个模型手改更贴近网关事实。
++  const refreshAiProxyModels = useCallback(async () => {
++    const notification = saveNotificationRef.current;
++    const feedbackKey = `ai-proxy-refresh:${provider.providerId}`;
++    setRefreshingModels(true);
++    notification.showFeedback({
++      key: feedbackKey,
++      message: notification.formatMessage({
++        id: "settings.modelProvider.refreshModelsPending",
++      }),
++      state: "pending",
++      durationMs: 0,
++    });
++    try {
++      const synced = await providerSettingsService.syncAiProxyModels(provider.providerId);
++      notification.showFeedback({
++        key: feedbackKey,
++        message: notification.formatMessage(
++          { id: "settings.modelProvider.refreshModelsSuccess" },
++          { count: synced.modelIds.length },
++        ),
++        state: "success",
++      });
++    } catch (error) {
++      logger.warn("[ModelProviderSection] 刷新网关模型列表失败", {
++        providerId: provider.providerId,
++        error,
++      });
++      notification.showFeedback({
++        key: feedbackKey,
++        message: notification.formatMessage(
++          { id: "settings.modelProvider.refreshModelsFailure" },
++          { error: error instanceof Error ? error.message : String(error) },
++        ),
++        state: "failure",
++        durationMs: 8_000,
++        dismissible: true,
++        dismissLabel: notification.formatMessage({ id: "common.close" }),
++      });
++    } finally {
++      setRefreshingModels(false);
++    }
++  }, [provider.providerId, providerSettingsService]);
++
+   const cancelIdleDraftSaveRef = useRef<() => void>(() => undefined);
+ 
+   const commitPendingDraft = useCallback(
+@@ -824,6 +965,20 @@ export function InlineEditableProviderCard({
+           />
+         )}
+ 
++        {isAiProxyProvider ? (
++          <ProviderAiProxyOAuthSection
++            status={aiProxyOAuth.status}
++            errorMessage={aiProxyOAuth.errorMessage}
++            disabled={!resolveAiProxyGatewayBaseUrl(baseUrlValue).trim()}
++            onStart={() => {
++              void aiProxyOAuth.start(resolveAiProxyGatewayBaseUrl(draftRef.current.baseUrlValue));
++            }}
++            onCancel={() => {
++              void aiProxyOAuth.cancel();
++            }}
++          />
++        ) : null}
++
+         {isApiKeyProvider ? (
+           <ProviderApiKeySection
+             apiKeyValue={apiKeyValue}
+@@ -848,6 +1003,8 @@ export function InlineEditableProviderCard({
+           providerAccess={provider.config.access}
+           models={models}
+           onTestModel={onTestModel ? handleTestModel : undefined}
++          onRefreshModels={isAiProxyProvider ? refreshAiProxyModels : undefined}
++          refreshingModels={refreshingModels}
+           onModelCommit={handleModelCommit}
+           onModelEnabledChange={handleModelEnabledChange}
+           onDeleteModel={handleDeleteModel}
+diff --git a/packages/ui/src/settings/model-provider-section/ProviderAiProxyOAuthSection.tsx b/packages/ui/src/settings/model-provider-section/ProviderAiProxyOAuthSection.tsx
+new file mode 100644
+index 0000000..77ef2e8
+--- /dev/null
++++ b/packages/ui/src/settings/model-provider-section/ProviderAiProxyOAuthSection.tsx
+@@ -0,0 +1,93 @@
++import { ExternalLinkIcon, Loader2Icon, TriangleAlertIcon } from "lucide-react";
++import { Button } from "@/components/ui/button.js";
++import { useZCodeIntl } from "@/i18n/IntlProvider.js";
++import type { AiProxyOAuthFlowStatus } from "@/login/useAiProxyOAuthFlow.js";
++
++/**
++ * 设置页供应商卡片上的网关 OAuth 入口：与欢迎页的「OAuth 授权」同一个宿主流程，
++ * 区别只是令牌落到**已存在的**这个 Provider 上，而不是新建一个。
++ */
++export function ProviderAiProxyOAuthSection({
++  status,
++  errorMessage,
++  onStart,
++  onCancel,
++  disabled = false,
++}: {
++  status: AiProxyOAuthFlowStatus;
++  errorMessage: string | null;
++  onStart: () => void;
++  onCancel: () => void;
++  /** 还没有网关地址时禁用入口：授权必须打在用户填的那个网关上。 */
++  disabled?: boolean;
++}) {
++  const { intl } = useZCodeIntl();
++  const waiting = status === "waiting";
++  const busy = status === "starting" || status === "completing";
++  const showCancel = waiting || busy;
++
++  return (
++    <div className="space-y-2 rounded-lg border border-border bg-surface p-3">
++      <div className="text-ui-base font-medium text-foreground">
++        {intl.formatMessage({ id: "settings.modelProvider.aiProxyOAuth.title" })}
++      </div>
++      <p className="text-ui-xs text-foreground-subtle">
++        {intl.formatMessage({ id: "settings.modelProvider.aiProxyOAuth.description" })}
++      </p>
++
++      {waiting ? (
++        <div className="flex items-center gap-2 text-ui-sm text-foreground-subtle">
++          <Loader2Icon className="size-3.5 shrink-0 animate-spin" />
++          {intl.formatMessage({ id: "settings.modelProvider.aiProxyOAuth.waiting" })}
++        </div>
++      ) : null}
++
++      {status === "completing" ? (
++        <div className="flex items-center gap-2 text-ui-sm text-foreground-subtle">
++          <Loader2Icon className="size-3.5 shrink-0 animate-spin" />
++          {intl.formatMessage({ id: "settings.modelProvider.aiProxyOAuth.completing" })}
++        </div>
++      ) : null}
++
++      {errorMessage ? (
++        <div className="flex items-start gap-2 text-ui-sm text-destructive">
++          <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
++          <span className="min-w-0 break-words">{errorMessage}</span>
++        </div>
++      ) : null}
++
++      <div className="flex items-center gap-2">
++        <Button
++          type="button"
++          variant="outline"
++          size="sm"
++          data-testid="model-provider-ai-proxy-oauth-start"
++          disabled={busy || disabled}
++          onClick={onStart}
++        >
++          {busy ? (
++            <Loader2Icon className="size-3.5 animate-spin" />
++          ) : (
++            <ExternalLinkIcon className="size-3.5" />
++          )}
++          {intl.formatMessage({
++            id: waiting
++              ? "settings.modelProvider.aiProxyOAuth.reopen"
++              : "settings.modelProvider.aiProxyOAuth.start",
++          })}
++        </Button>
++        {showCancel ? (
++          <Button
++            type="button"
++            variant="ghost"
++            size="sm"
++            disabled={status === "completing"}
++            onClick={onCancel}
++          >
++            {intl.formatMessage({ id: "settings.modelProvider.aiProxyOAuth.cancel" })}
++          </Button>
++        ) : null}
++      </div>
++    </div>
++  );
++}
+diff --git a/packages/ui/src/settings/model-provider-section/ProviderCardSections.tsx b/packages/ui/src/settings/model-provider-section/ProviderCardSections.tsx
+index e461e33..54fba60 100644
+--- a/packages/ui/src/settings/model-provider-section/ProviderCardSections.tsx
++++ b/packages/ui/src/settings/model-provider-section/ProviderCardSections.tsx
+@@ -22,7 +22,15 @@ import {
+   TID_MODEL_PROVIDER_NAME_INPUT,
+   testId,
+ } from "@zcode/shared";
+-import { InfoIcon, LockKeyholeIcon, Plus, Pencil, Trash2, MoreHorizontal } from "lucide-react";
++import {
++  InfoIcon,
++  LockKeyholeIcon,
++  Plus,
++  Pencil,
++  RefreshCw,
++  Trash2,
++  MoreHorizontal,
++} from "lucide-react";
+ import { Button } from "@/components/ui/button.js";
+ import { Input } from "@/components/ui/input.js";
+ import {
+@@ -350,6 +358,8 @@ export function ProviderModelsSection({
+   providerAccess,
+   models,
+   onTestModel,
++  onRefreshModels,
++  refreshingModels = false,
+   onModelCommit,
+   onModelEnabledChange,
+   onDeleteModel,
+@@ -363,6 +373,9 @@ export function ProviderModelsSection({
+   providerAccess?: ProviderConfigObject["access"];
+   models: ProviderSettingsFormModel[];
+   onTestModel?: (model: string) => Promise<ModelConnectivityResult>;
++  /** 从外部目录（网关 /v1/models）刷新整个模型列表与参数；仅网关供应商提供。 */
++  onRefreshModels?: () => void | Promise<void>;
++  refreshingModels?: boolean;
+   onModelCommit: (
+     originalModelId: string,
+     model: ProviderSettingsFormModel,
+@@ -470,17 +483,39 @@ export function ProviderModelsSection({
+         <span className="text-ui-base text-foreground-subtle">
+           {intl.formatMessage({ id: "settings.modelProvider.models" })}
+         </span>
+-        <Button
+-          type="button"
+-          variant="secondary"
+-          size="default"
+-          className="rounded-lg"
+-          data-testid={TID_MODEL_PROVIDER_ADD_MODEL_BUTTON}
+-          onClick={openAddDialog}
+-        >
+-          <Plus data-icon="inline-start" aria-hidden="true" />
+-          {intl.formatMessage({ id: "settings.modelProvider.addModel" })}
+-        </Button>
++        <div className="flex items-center gap-2">
++          {onRefreshModels ? (
++            <Button
++              type="button"
++              variant="outline"
++              size="default"
++              className="rounded-lg"
++              data-testid="model-provider-refresh-models-button"
++              disabled={refreshingModels}
++              onClick={() => {
++                void onRefreshModels();
++              }}
++            >
++              <RefreshCw
++                data-icon="inline-start"
++                aria-hidden="true"
++                className={refreshingModels ? "animate-spin" : undefined}
++              />
++              {intl.formatMessage({ id: "settings.modelProvider.refreshModels" })}
++            </Button>
++          ) : null}
++          <Button
++            type="button"
++            variant="secondary"
++            size="default"
++            className="rounded-lg"
++            data-testid={TID_MODEL_PROVIDER_ADD_MODEL_BUTTON}
++            onClick={openAddDialog}
++          >
++            <Plus data-icon="inline-start" aria-hidden="true" />
++            {intl.formatMessage({ id: "settings.modelProvider.addModel" })}
++          </Button>
++        </div>
+       </div>
+       {models.length > 0 ? (
+         <div className="overflow-hidden rounded-lg border border-input-border bg-input">
+-- 
+2.50.1 (Apple Git-155)
+
